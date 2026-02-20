@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useState } from 'react';
+import { createElement, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThemeAnimationType, useModeAnimation } from 'react-theme-switch-animation';
@@ -8,6 +8,8 @@ type HeadingItem = {
   text: string;
   level: number;
 };
+
+const POLL_INTERVAL_MS = 800;
 
 function createSlugger() {
   const seen = new Map<string, number>();
@@ -29,8 +31,25 @@ function createSlugger() {
 function extractHeadings(markdown: string): HeadingItem[] {
   const slug = createSlugger();
   const headings: HeadingItem[] = [];
+  let activeFence: '`' | '~' | null = null;
 
   for (const line of markdown.split(/\r?\n/)) {
+    const fenceMatch = line.match(/^\s*([`~]{3,})/);
+    if (fenceMatch) {
+      const fenceChar = fenceMatch[1][0] as '`' | '~';
+      if (activeFence === null) {
+        activeFence = fenceChar;
+      } else if (activeFence === fenceChar) {
+        activeFence = null;
+      }
+
+      continue;
+    }
+
+    if (activeFence !== null) {
+      continue;
+    }
+
     const match = line.match(/^(#{1,6})\s+(.+)$/);
     if (!match) {
       continue;
@@ -67,6 +86,7 @@ export function App(): JSX.Element {
   const [filePath, setFilePath] = useState('');
   const [activeHeadingId, setActiveHeadingId] = useState('');
   const [hoveredHeadingId, setHoveredHeadingId] = useState('');
+  const markdownRef = useRef('');
 
   const headings = useMemo(() => extractHeadings(markdown), [markdown]);
 
@@ -78,37 +98,62 @@ export function App(): JSX.Element {
   });
 
   useEffect(() => {
-    const controller = new AbortController();
+    let isDisposed = false;
+    let isLoading = false;
 
     const loadMarkdown = async () => {
+      if (isLoading || isDisposed) {
+        return;
+      }
+
+      isLoading = true;
+
       try {
         const response = await fetch('/api/markdown', {
-          signal: controller.signal
+          cache: 'no-store'
         });
 
         if (!response.ok) {
           throw new Error(`Request failed with status ${response.status}`);
         }
 
-        setFilePath(response.headers.get('x-md-path') ?? '');
-        const text = await response.text();
-        setMarkdown(text);
-      } catch (fetchError) {
-        if (controller.signal.aborted) {
+        if (isDisposed) {
           return;
         }
 
+        setFilePath(response.headers.get('x-md-path') ?? '');
+        const text = await response.text();
+
+        if (isDisposed) {
+          return;
+        }
+
+        if (text !== markdownRef.current) {
+          markdownRef.current = text;
+          setMarkdown(text);
+        }
+
+        setError('');
+      } catch (fetchError) {
         const message =
           fetchError instanceof Error
             ? fetchError.message
             : 'Unable to load markdown content';
-        setError(message);
+        if (!isDisposed) {
+          setError(message);
+        }
+      } finally {
+        isLoading = false;
       }
     };
 
-    loadMarkdown();
+    void loadMarkdown();
+    const refreshTimer = window.setInterval(loadMarkdown, POLL_INTERVAL_MS);
 
-    return () => controller.abort();
+    return () => {
+      isDisposed = true;
+      window.clearInterval(refreshTimer);
+    };
   }, []);
 
   useEffect(() => {

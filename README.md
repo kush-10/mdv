@@ -1,5 +1,4 @@
 # mdv - Local MD Viewer
-
 View a local markdown file in a clean browser reading layout.
 
 ## Installation
@@ -52,6 +51,28 @@ pnpm i
 pnpm dev
 ```
 
+### Make Shortcuts
+
+```bash
+# Show all available targets
+make help
+
+# Install deps
+make install
+
+# Add mdview globally with pnpm
+make add
+
+# Build web + CLI
+make build
+
+# Run built CLI against README.md
+make run
+
+# Run built CLI against a specific file/port
+make run MD_FILE=docs/guide.md PORT=8080
+```
+
 ## Build + Run without global link
 
 ```bash
@@ -64,4 +85,5 @@ pnpm -C packages/cli start -- ./README.md
 - Requires Node.js `18+`.
 - The CLI serves the built web app from `packages/web/dist`.
 - `GET /api/markdown` returns the markdown content for the React app.
+- Live refresh is enabled by default and polls for changes every `800ms`.
 - Press `Ctrl+C` to shut down cleanly.
