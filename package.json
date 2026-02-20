@@ -1,0 +1,10 @@
+{
+  "name": "mdv",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "pnpm -C packages/web build && pnpm -C packages/cli dev -- ../../README.md",
+    "build": "pnpm -C packages/web build && pnpm -C packages/cli build"
+  }
+}
