@@ -193,7 +193,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 async function assertBuildExists(): Promise<void> {
   const indexPath = path.join(WEB_DIST_PATH, 'index.html');
   if (!(await fileExists(indexPath))) {
-    throw new Error(`Web build not found at ${WEB_DIST_PATH}. Run \`pnpm -C packages/web build\` first.`);
+    throw new Error(`Web build not found at ${WEB_DIST_PATH}. Run \`bun run --cwd packages/web build\` first.`);
   }
 }
 
@@ -202,7 +202,7 @@ function printPairingInstructions(origin: string, token: string): void {
   console.log('Generated new server token. Save this now:');
   console.log(`Token: ${token}`);
   console.log('Pair a client with:');
-  console.log(`mdview remote pair ${origin} ${token}`);
+  console.log(`mdv remote pair ${origin} ${token}`);
   console.log('');
 }
 

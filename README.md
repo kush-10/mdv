@@ -7,15 +7,18 @@ mdv is a local-first markdown viewer. Open `.md` files in a clean reading UI, th
 ```bash
 git clone https://github.com/kush-10/mdv
 cd mdv
-pnpm i
-pnpm build
+bun install
+bun run build
 ```
 
 Optional global commands:
 
 ```bash
-pnpm add --global ./packages/cli
-pnpm add --global ./packages/server
+# Default: CLI only
+bun add -g ./packages/cli
+
+# Install both CLI and server
+bun run install:full
 ```
 
 ## Usage
@@ -23,7 +26,7 @@ pnpm add --global ./packages/server
 ### 1) View a local markdown file
 
 ```bash
-mdview README.md
+mdv README.md
 ```
 
 ### 2) Start the self-hosted server
@@ -37,13 +40,13 @@ On first run, the server generates a secure token and prints a pairing command.
 ### 3) Pair your client
 
 ```bash
-mdview remote pair https://docs.example.com <token>
+mdv remote pair https://docs.example.com <token>
 ```
 
 ### 4) Push a markdown file
 
 ```bash
-mdview push README.md
+mdv push README.md
 ```
 
 The server returns a random public URL like:

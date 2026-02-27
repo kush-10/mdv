@@ -56,12 +56,12 @@ type MdvConfig = {
 
 function printUsage(): void {
   console.error('Usage:');
-  console.error('  mdview <path-to-markdown-file> [--port <number>] [--no-open]');
-  console.error('  mdview push <path-to-markdown-file> [--server <url>] [--token <token>]');
-  console.error('  mdview remote set <server-url>');
-  console.error('  mdview remote pair <server-url> <token>');
-  console.error('  mdview remote clear');
-  console.error('  mdview remote show');
+  console.error('  mdv <path-to-markdown-file> [--port <number>] [--no-open]');
+  console.error('  mdv push <path-to-markdown-file> [--server <url>] [--token <token>]');
+  console.error('  mdv remote set <server-url>');
+  console.error('  mdv remote pair <server-url> <token>');
+  console.error('  mdv remote clear');
+  console.error('  mdv remote show');
 }
 
 function getProjectRoot(): string {
@@ -176,7 +176,7 @@ function parseCommand(argv: string[]): Command {
     if (args[1] === 'set') {
       const server = args[2];
       if (!server) {
-        throw new Error('Usage: mdview remote set <server-url>');
+        throw new Error('Usage: mdv remote set <server-url>');
       }
 
       return {
@@ -201,7 +201,7 @@ function parseCommand(argv: string[]): Command {
       const server = args[2];
       const token = args[3];
       if (!server || !token) {
-        throw new Error('Usage: mdview remote pair <server-url> <token>');
+        throw new Error('Usage: mdv remote pair <server-url> <token>');
       }
 
       return {
@@ -210,7 +210,7 @@ function parseCommand(argv: string[]): Command {
       };
     }
 
-    throw new Error('Usage: mdview remote <set|pair|clear|show>');
+    throw new Error('Usage: mdv remote <set|pair|clear|show>');
   }
 
   return {
@@ -256,7 +256,7 @@ async function assertBuildExists(): Promise<void> {
 
   if (!(await fileExists(indexPath))) {
     throw new Error(
-      `Web build not found at ${WEB_DIST_PATH}. Run \`pnpm build\` first.`
+      `Web build not found at ${WEB_DIST_PATH}. Run \`bun run build\` first.`
     );
   }
 }
@@ -312,7 +312,7 @@ async function resolveServerUrl(serverFromFlag: string | undefined): Promise<str
   }
 
   throw new Error(
-    'No remote server configured. Run `mdview remote set <server-url>` or pass `--server <url>`.'
+    'No remote server configured. Run `mdv remote set <server-url>` or pass `--server <url>`.'
   );
 }
 
@@ -351,7 +351,7 @@ async function runLocalView(options: LocalViewOptions): Promise<void> {
   const selectedPort = options.port ?? (await getPort({ port: DEFAULT_PORT_RANGE }));
   const server = app.listen(selectedPort, async () => {
     const url = `http://localhost:${selectedPort}`;
-    console.log(`mdview serving: ${markdownPath}`);
+    console.log(`mdv serving: ${markdownPath}`);
     console.log(`Open: ${url}`);
 
     if (options.shouldOpenBrowser) {
@@ -361,12 +361,12 @@ async function runLocalView(options: LocalViewOptions): Promise<void> {
 
   server.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EADDRINUSE' && options.port) {
-      console.error(`mdview failed: Port ${options.port} is already in use.`);
+      console.error(`mdv failed: Port ${options.port} is already in use.`);
       process.exit(1);
       return;
     }
 
-    console.error(`mdview failed: ${error.message}`);
+    console.error(`mdv failed: ${error.message}`);
     process.exit(1);
   });
 
@@ -395,7 +395,7 @@ async function runLocalView(options: LocalViewOptions): Promise<void> {
 async function runPush(options: PushOptions): Promise<void> {
   const rawPath = options.markdownPathArg;
   if (!rawPath) {
-    throw new Error('Usage: mdview push <path-to-markdown-file> [--server <url>] [--token <token>]');
+    throw new Error('Usage: mdv push <path-to-markdown-file> [--server <url>] [--token <token>]');
   }
 
   const markdownPath = await resolveMarkdownPath(rawPath);
@@ -407,7 +407,7 @@ async function runPush(options: PushOptions): Promise<void> {
   const token = options.token ?? process.env.MDV_TOKEN ?? config.token;
 
   if (!token) {
-    throw new Error('Missing bearer token. Set with `mdview remote pair <server-url> <token>`, `MDV_TOKEN`, or `--token <token>`.');
+    throw new Error('Missing bearer token. Set with `mdv remote pair <server-url> <token>`, `MDV_TOKEN`, or `--token <token>`.');
   }
 
   const response = await fetch(`${serverUrl}/api/push`, {
@@ -445,7 +445,7 @@ async function runPush(options: PushOptions): Promise<void> {
 
 async function runRemoteSet(options: RemoteSetOptions): Promise<void> {
   if (!options.server) {
-    throw new Error('Usage: mdview remote set <server-url>');
+    throw new Error('Usage: mdv remote set <server-url>');
   }
 
   const serverUrl = normalizeServerUrl(options.server);
@@ -478,7 +478,7 @@ async function runRemoteShow(): Promise<void> {
 
 async function runRemotePair(options: RemotePairOptions): Promise<void> {
   if (!options.server || !options.token) {
-    throw new Error('Usage: mdview remote pair <server-url> <token>');
+    throw new Error('Usage: mdv remote pair <server-url> <token>');
   }
 
   const serverUrl = normalizeServerUrl(options.server);
@@ -538,6 +538,6 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`mdview failed: ${message}`);
+  console.error(`mdv failed: ${message}`);
   process.exit(1);
 });

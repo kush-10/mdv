@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "mdview": "dist/index.js"
+    "mdv": "dist/index.js"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
