@@ -25,7 +25,6 @@ type PushOptions = {
   markdownPathArg?: string;
   server?: string;
   token?: string;
-  slug?: string;
 };
 
 type RemoteSetOptions = {
@@ -46,7 +45,7 @@ type Command =
   | { type: 'remote-show' };
 
 type PushResponse = {
-  slug: string;
+  id: string;
   url: string;
 };
 
@@ -58,7 +57,7 @@ type MdvConfig = {
 function printUsage(): void {
   console.error('Usage:');
   console.error('  mdview <path-to-markdown-file> [--port <number>] [--no-open]');
-  console.error('  mdview push <path-to-markdown-file> [--server <url>] [--token <token>] [--slug <slug>]');
+  console.error('  mdview push <path-to-markdown-file> [--server <url>] [--token <token>]');
   console.error('  mdview remote set <server-url>');
   console.error('  mdview remote pair <server-url> <token>');
   console.error('  mdview remote clear');
@@ -123,7 +122,6 @@ function parsePushOptions(argv: string[]): PushOptions {
   const positional: string[] = [];
   let server: string | undefined;
   let token: string | undefined;
-  let slug: string | undefined;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -150,17 +148,6 @@ function parsePushOptions(argv: string[]): PushOptions {
       continue;
     }
 
-    if (arg === '--slug') {
-      const next = args[i + 1];
-      if (!next) {
-        throw new Error('Missing value for --slug.');
-      }
-
-      slug = next;
-      i += 1;
-      continue;
-    }
-
     if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}`);
     }
@@ -171,8 +158,7 @@ function parsePushOptions(argv: string[]): PushOptions {
   return {
     markdownPathArg: positional[0],
     server,
-    token,
-    slug
+    token
   };
 }
 
@@ -298,26 +284,6 @@ function normalizeServerUrl(rawUrl: string): string {
   return parsed.toString().replace(/\/+$/, '');
 }
 
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 100);
-}
-
-function makeDefaultSlug(markdownPath: string): string {
-  const fileName = path.basename(markdownPath, path.extname(markdownPath));
-  const slug = slugify(fileName);
-  if (slug) {
-    return slug;
-  }
-
-  const fallback = `doc-${Date.now()}`;
-  return fallback;
-}
-
 async function readConfig(): Promise<MdvConfig> {
   const configPath = getConfigPath();
   if (!(await fileExists(configPath))) {
@@ -429,7 +395,7 @@ async function runLocalView(options: LocalViewOptions): Promise<void> {
 async function runPush(options: PushOptions): Promise<void> {
   const rawPath = options.markdownPathArg;
   if (!rawPath) {
-    throw new Error('Usage: mdview push <path-to-markdown-file> [--server <url>] [--token <token>] [--slug <slug>]');
+    throw new Error('Usage: mdview push <path-to-markdown-file> [--server <url>] [--token <token>]');
   }
 
   const markdownPath = await resolveMarkdownPath(rawPath);
@@ -444,11 +410,6 @@ async function runPush(options: PushOptions): Promise<void> {
     throw new Error('Missing bearer token. Set with `mdview remote pair <server-url> <token>`, `MDV_TOKEN`, or `--token <token>`.');
   }
 
-  const slugCandidate = options.slug ? slugify(options.slug) : makeDefaultSlug(markdownPath);
-  if (!slugCandidate) {
-    throw new Error('Could not generate a valid slug. Pass one with `--slug <slug>`.');
-  }
-
   const response = await fetch(`${serverUrl}/api/push`, {
     method: 'POST',
     headers: {
@@ -456,7 +417,6 @@ async function runPush(options: PushOptions): Promise<void> {
       authorization: `Bearer ${token}`
     },
     body: JSON.stringify({
-      slug: slugCandidate,
       fileName: path.basename(markdownPath),
       markdown: markdownContent
     })
@@ -474,12 +434,12 @@ async function runPush(options: PushOptions): Promise<void> {
     throw new Error('Push failed: server returned invalid JSON response.');
   }
 
-  if (!parsed.url || !parsed.slug) {
-    throw new Error('Push failed: server response missing `url` or `slug`.');
+  if (!parsed.url || !parsed.id) {
+    throw new Error('Push failed: server response missing `url` or `id`.');
   }
 
   console.log(`Pushed: ${markdownPath}`);
-  console.log(`Slug: ${parsed.slug}`);
+  console.log(`ID: ${parsed.id}`);
   console.log(`Public URL: ${parsed.url}`);
 }
 

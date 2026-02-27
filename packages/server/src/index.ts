@@ -27,7 +27,6 @@ type Command =
   | { type: 'token-rotate'; dataDir: string };
 
 type PushBody = {
-  slug?: string;
   fileName?: string;
   markdown?: string;
 };
@@ -174,29 +173,12 @@ async function resolveServerToken(dataDir: string): Promise<{ token: string; sou
   return { token, source: 'generated' };
 }
 
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 100);
+function normalizeDocumentId(value: string): string {
+  return value.toLowerCase().trim().replace(/[^a-z0-9_-]/g, '').slice(0, 64);
 }
 
-function inferSlug(body: PushBody): string {
-  const fromSlug = typeof body.slug === 'string' ? slugify(body.slug) : '';
-  if (fromSlug) {
-    return fromSlug;
-  }
-
-  const fileNameRaw = typeof body.fileName === 'string' ? body.fileName : '';
-  const noExt = fileNameRaw.replace(/\.[^.]+$/, '');
-  const fromName = slugify(noExt);
-  if (fromName) {
-    return fromName;
-  }
-
-  return `doc-${Date.now()}`;
+function createDocumentId(): string {
+  return randomBytes(12).toString('hex');
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -224,7 +206,7 @@ function printPairingInstructions(origin: string, token: string): void {
   console.log('');
 }
 
-function parseSlugFromReferer(refererHeader: string | undefined): string | null {
+function parseIdFromReferer(refererHeader: string | undefined): string | null {
   if (!refererHeader) {
     return null;
   }
@@ -242,6 +224,18 @@ function parseSlugFromReferer(refererHeader: string | undefined): string | null 
   }
 }
 
+async function createUniqueDocumentId(docsDir: string): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const id = createDocumentId();
+    const docPath = path.join(docsDir, `${id}.md`);
+    if (!(await fileExists(docPath))) {
+      return id;
+    }
+  }
+
+  throw new Error('Failed to allocate unique document id.');
+}
+
 async function runStart(commandOptions: { port?: number; dataDir: string }): Promise<void> {
   const resolvedToken = await resolveServerToken(commandOptions.dataDir);
   const config: StartConfig = {
@@ -257,6 +251,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   await fs.mkdir(docsDir, { recursive: true });
 
   const app = express();
+  app.set('trust proxy', true);
   app.use(express.json({ limit: '5mb' }));
 
   app.get('/health', (_req, res) => {
@@ -277,61 +272,89 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
-    const slug = inferSlug(body);
-    const docPath = path.join(docsDir, `${slug}.md`);
+    const id = await createUniqueDocumentId(docsDir);
+    const docPath = path.join(docsDir, `${id}.md`);
 
     await fs.writeFile(docPath, body.markdown, 'utf8');
 
     const origin = `${req.protocol}://${req.get('host')}`;
     res.json({
-      slug,
-      url: `${origin}/d/${encodeURIComponent(slug)}`
+      id,
+      url: `${origin}/d/${encodeURIComponent(id)}`
     });
   });
 
-  app.get('/api/markdown/:slug', async (req, res) => {
-    const slug = slugify(req.params.slug ?? '');
-    if (!slug) {
-      res.status(400).json({ error: 'Invalid slug.' });
+  app.get('/api/markdown/:id', async (req, res) => {
+    const id = normalizeDocumentId(req.params.id ?? '');
+    if (!id) {
+      res.status(400).json({ error: 'Invalid document id.' });
       return;
     }
 
-    const docPath = path.join(docsDir, `${slug}.md`);
+    const docPath = path.join(docsDir, `${id}.md`);
     try {
       const markdown = await fs.readFile(docPath, 'utf8');
-      res.setHeader('x-md-path', `${slug}.md`);
+      res.setHeader('x-md-path', `${id}.md`);
       res.type('text/plain; charset=utf-8').send(markdown);
     } catch {
-      res.status(404).json({ error: `Document not found: ${slug}` });
+      res.status(404).json({ error: `Document not found: ${id}` });
     }
   });
 
   app.get('/api/markdown', async (req, res) => {
-    const fromQuery = typeof req.query.slug === 'string' ? req.query.slug : '';
-    const fromReferer = parseSlugFromReferer(req.get('referer'));
-    const slug = slugify(fromQuery || fromReferer || '');
-    if (!slug) {
-      res.status(400).json({ error: 'Missing slug. Open a public document URL at /d/<slug>.' });
+    const fromIdQuery = typeof req.query.id === 'string' ? req.query.id : '';
+    const fromLegacySlugQuery = typeof req.query.slug === 'string' ? req.query.slug : '';
+    const fromReferer = parseIdFromReferer(req.get('referer'));
+    const id = normalizeDocumentId(fromIdQuery || fromLegacySlugQuery || fromReferer || '');
+    if (!id) {
+      res.status(400).json({ error: 'Missing id. Open a public document URL at /d/<id>.' });
       return;
     }
 
-    const docPath = path.join(docsDir, `${slug}.md`);
+    const docPath = path.join(docsDir, `${id}.md`);
     try {
       const markdown = await fs.readFile(docPath, 'utf8');
-      res.setHeader('x-md-path', `${slug}.md`);
+      res.setHeader('x-md-path', `${id}.md`);
       res.type('text/plain; charset=utf-8').send(markdown);
     } catch {
-      res.status(404).json({ error: `Document not found: ${slug}` });
+      res.status(404).json({ error: `Document not found: ${id}` });
     }
+  });
+
+  app.get('/', (_req, res) => {
+    res.type('text/html; charset=utf-8').send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mdv</title>
+    <style>
+      body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; background: #f7f7f5; color: #161616; }
+      main { max-width: 680px; margin: 12vh auto; padding: 0 24px; }
+      h1 { margin: 0 0 12px; font-size: 2rem; }
+      p { margin: 0 0 18px; line-height: 1.7; }
+      a { color: inherit; }
+      .hint { color: #444; font-size: 0.95rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>mdv</h1>
+      <p>A local-first markdown viewer with secure push to a self-hosted server for public sharing.</p>
+      <p><a href="https://github.com/kush-10/mdv" target="_blank" rel="noreferrer">View on GitHub</a></p>
+      <p class="hint">Published documents are available at <code>/d/&lt;id&gt;</code>.</p>
+    </main>
+  </body>
+</html>`);
   });
 
   app.use(express.static(WEB_DIST_PATH, { index: false }));
 
-  app.get('/d/:slug', (_req, res) => {
+  app.get('/d/:id', (_req, res) => {
     res.sendFile(path.join(WEB_DIST_PATH, 'index.html'));
   });
 
-  app.get('/d/:slug/*', (_req, res) => {
+  app.get('/d/:id/*', (_req, res) => {
     res.sendFile(path.join(WEB_DIST_PATH, 'index.html'));
   });
 
