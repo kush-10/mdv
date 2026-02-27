@@ -7,21 +7,25 @@ mdv is a local-first markdown viewer. Open `.md` files in a clean reading UI, th
 ```bash
 git clone https://github.com/kush-10/mdv
 cd mdv
-bun install
-bun run build
+bun run setup
 ```
 
-Optional global commands:
+`setup` installs dependencies, builds all packages, and installs both global commands (`mdv`, `mdv-server`).
+
+Optional global install command:
 
 ```bash
-# Default: CLI only
-bun run install:cli
-
-# Install both CLI and server
-bun run install:full
+# Install both mdv and mdv-server
+bun run install:global
 ```
 
 These scripts use Bun for workspace install/build, then install binaries globally via npm so `mdv` and `mdv-server` are available on your PATH.
+
+On Linux, if your global npm prefix is not writable, install falls back to `~/.local` automatically.
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
 
 ## Usage
 
