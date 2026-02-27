@@ -12,18 +12,69 @@ const __dirname = path.dirname(__filename);
 
 const WEB_DIST_PATH = path.resolve(__dirname, '../../web/dist');
 const DEFAULT_PORT_RANGE = portNumbers(4173, 4300);
+const CONFIG_DIR_NAME = '.mdv';
+const CONFIG_FILE_NAME = 'config.json';
 
-type CliOptions = {
-  markdownArg?: string;
+type LocalViewOptions = {
+  markdownPathArg?: string;
   port?: number;
   shouldOpenBrowser: boolean;
 };
 
+type PushOptions = {
+  markdownPathArg?: string;
+  server?: string;
+  token?: string;
+  slug?: string;
+};
+
+type RemoteSetOptions = {
+  server?: string;
+};
+
+type RemotePairOptions = {
+  server?: string;
+  token?: string;
+};
+
+type Command =
+  | { type: 'local-view'; options: LocalViewOptions }
+  | { type: 'push'; options: PushOptions }
+  | { type: 'remote-set'; options: RemoteSetOptions }
+  | { type: 'remote-pair'; options: RemotePairOptions }
+  | { type: 'remote-clear' }
+  | { type: 'remote-show' };
+
+type PushResponse = {
+  slug: string;
+  url: string;
+};
+
+type MdvConfig = {
+  remote?: string;
+  token?: string;
+};
+
 function printUsage(): void {
-  console.error('Usage: mdview <path-to-markdown-file> [--port <number>] [--no-open]');
+  console.error('Usage:');
+  console.error('  mdview <path-to-markdown-file> [--port <number>] [--no-open]');
+  console.error('  mdview push <path-to-markdown-file> [--server <url>] [--token <token>] [--slug <slug>]');
+  console.error('  mdview remote set <server-url>');
+  console.error('  mdview remote pair <server-url> <token>');
+  console.error('  mdview remote clear');
+  console.error('  mdview remote show');
 }
 
-function parseArgs(argv: string[]): CliOptions {
+function getProjectRoot(): string {
+  const initCwd = process.env.INIT_CWD;
+  return initCwd ? path.resolve(initCwd) : process.cwd();
+}
+
+function getConfigPath(): string {
+  return path.join(getProjectRoot(), CONFIG_DIR_NAME, CONFIG_FILE_NAME);
+}
+
+function parseLocalViewOptions(argv: string[]): LocalViewOptions {
   const args = argv.filter((arg) => arg !== '--');
   const positional: string[] = [];
   let shouldOpenBrowser = true;
@@ -61,9 +112,124 @@ function parseArgs(argv: string[]): CliOptions {
   }
 
   return {
-    markdownArg: positional[0],
+    markdownPathArg: positional[0],
     port,
     shouldOpenBrowser
+  };
+}
+
+function parsePushOptions(argv: string[]): PushOptions {
+  const args = argv.filter((arg) => arg !== '--');
+  const positional: string[] = [];
+  let server: string | undefined;
+  let token: string | undefined;
+  let slug: string | undefined;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+
+    if (arg === '--server') {
+      const next = args[i + 1];
+      if (!next) {
+        throw new Error('Missing value for --server.');
+      }
+
+      server = next;
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--token') {
+      const next = args[i + 1];
+      if (!next) {
+        throw new Error('Missing value for --token.');
+      }
+
+      token = next;
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--slug') {
+      const next = args[i + 1];
+      if (!next) {
+        throw new Error('Missing value for --slug.');
+      }
+
+      slug = next;
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith('-')) {
+      throw new Error(`Unknown option: ${arg}`);
+    }
+
+    positional.push(arg);
+  }
+
+  return {
+    markdownPathArg: positional[0],
+    server,
+    token,
+    slug
+  };
+}
+
+function parseCommand(argv: string[]): Command {
+  const args = argv.filter((arg) => arg !== '--');
+
+  if (args[0] === 'push') {
+    return {
+      type: 'push',
+      options: parsePushOptions(args.slice(1))
+    };
+  }
+
+  if (args[0] === 'remote') {
+    if (args[1] === 'set') {
+      const server = args[2];
+      if (!server) {
+        throw new Error('Usage: mdview remote set <server-url>');
+      }
+
+      return {
+        type: 'remote-set',
+        options: { server }
+      };
+    }
+
+    if (args[1] === 'show') {
+      return {
+        type: 'remote-show'
+      };
+    }
+
+    if (args[1] === 'clear') {
+      return {
+        type: 'remote-clear'
+      };
+    }
+
+    if (args[1] === 'pair') {
+      const server = args[2];
+      const token = args[3];
+      if (!server || !token) {
+        throw new Error('Usage: mdview remote pair <server-url> <token>');
+      }
+
+      return {
+        type: 'remote-pair',
+        options: { server, token }
+      };
+    }
+
+    throw new Error('Usage: mdview remote <set|pair|clear|show>');
+  }
+
+  return {
+    type: 'local-view',
+    options: parseLocalViewOptions(args)
   };
 }
 
@@ -123,9 +289,69 @@ async function validateMarkdownPath(markdownPath: string): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  const rawPath = options.markdownArg;
+function normalizeServerUrl(rawUrl: string): string {
+  const parsed = new URL(rawUrl);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Invalid server URL protocol: ${parsed.protocol}`);
+  }
+
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 100);
+}
+
+function makeDefaultSlug(markdownPath: string): string {
+  const fileName = path.basename(markdownPath, path.extname(markdownPath));
+  const slug = slugify(fileName);
+  if (slug) {
+    return slug;
+  }
+
+  const fallback = `doc-${Date.now()}`;
+  return fallback;
+}
+
+async function readConfig(): Promise<MdvConfig> {
+  const configPath = getConfigPath();
+  if (!(await fileExists(configPath))) {
+    return {};
+  }
+
+  const raw = await fs.readFile(configPath, 'utf8');
+  const parsed = JSON.parse(raw) as MdvConfig;
+  return parsed;
+}
+
+async function writeConfig(config: MdvConfig): Promise<void> {
+  const configPath = getConfigPath();
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+async function resolveServerUrl(serverFromFlag: string | undefined): Promise<string> {
+  if (serverFromFlag) {
+    return normalizeServerUrl(serverFromFlag);
+  }
+
+  const config = await readConfig();
+  if (config.remote) {
+    return normalizeServerUrl(config.remote);
+  }
+
+  throw new Error(
+    'No remote server configured. Run `mdview remote set <server-url>` or pass `--server <url>`.'
+  );
+}
+
+async function runLocalView(options: LocalViewOptions): Promise<void> {
+  const rawPath = options.markdownPathArg;
 
   if (!rawPath) {
     printUsage();
@@ -198,6 +424,156 @@ async function main(): Promise<void> {
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+}
+
+async function runPush(options: PushOptions): Promise<void> {
+  const rawPath = options.markdownPathArg;
+  if (!rawPath) {
+    throw new Error('Usage: mdview push <path-to-markdown-file> [--server <url>] [--token <token>] [--slug <slug>]');
+  }
+
+  const markdownPath = await resolveMarkdownPath(rawPath);
+  await validateMarkdownPath(markdownPath);
+  const markdownContent = await fs.readFile(markdownPath, 'utf8');
+
+  const serverUrl = await resolveServerUrl(options.server);
+  const config = await readConfig();
+  const token = options.token ?? process.env.MDV_TOKEN ?? config.token;
+
+  if (!token) {
+    throw new Error('Missing bearer token. Set with `mdview remote pair <server-url> <token>`, `MDV_TOKEN`, or `--token <token>`.');
+  }
+
+  const slugCandidate = options.slug ? slugify(options.slug) : makeDefaultSlug(markdownPath);
+  if (!slugCandidate) {
+    throw new Error('Could not generate a valid slug. Pass one with `--slug <slug>`.');
+  }
+
+  const response = await fetch(`${serverUrl}/api/push`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      slug: slugCandidate,
+      fileName: path.basename(markdownPath),
+      markdown: markdownContent
+    })
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`Push failed (${response.status}): ${responseText}`);
+  }
+
+  let parsed: PushResponse;
+  try {
+    parsed = JSON.parse(responseText) as PushResponse;
+  } catch {
+    throw new Error('Push failed: server returned invalid JSON response.');
+  }
+
+  if (!parsed.url || !parsed.slug) {
+    throw new Error('Push failed: server response missing `url` or `slug`.');
+  }
+
+  console.log(`Pushed: ${markdownPath}`);
+  console.log(`Slug: ${parsed.slug}`);
+  console.log(`Public URL: ${parsed.url}`);
+}
+
+async function runRemoteSet(options: RemoteSetOptions): Promise<void> {
+  if (!options.server) {
+    throw new Error('Usage: mdview remote set <server-url>');
+  }
+
+  const serverUrl = normalizeServerUrl(options.server);
+  const existing = await readConfig();
+  const next: MdvConfig = {
+    ...existing,
+    remote: serverUrl
+  };
+
+  await writeConfig(next);
+  console.log(`Remote set: ${serverUrl}`);
+  console.log(`Config: ${getConfigPath()}`);
+}
+
+async function runRemoteShow(): Promise<void> {
+  const config = await readConfig();
+
+  const tokenPreview = config.token
+    ? `${config.token.slice(0, 4)}...${config.token.slice(-4)}`
+    : 'not set';
+
+  if (!config.remote && !config.token) {
+    console.log('No remote configured.');
+    return;
+  }
+
+  console.log(`Remote: ${config.remote ?? 'not set'}`);
+  console.log(`Token: ${tokenPreview}`);
+}
+
+async function runRemotePair(options: RemotePairOptions): Promise<void> {
+  if (!options.server || !options.token) {
+    throw new Error('Usage: mdview remote pair <server-url> <token>');
+  }
+
+  const serverUrl = normalizeServerUrl(options.server);
+  const existing = await readConfig();
+  const next: MdvConfig = {
+    ...existing,
+    remote: serverUrl,
+    token: options.token
+  };
+
+  await writeConfig(next);
+  console.log(`Remote paired: ${serverUrl}`);
+  console.log(`Config: ${getConfigPath()}`);
+}
+
+async function runRemoteClear(): Promise<void> {
+  const configPath = getConfigPath();
+  if (!(await fileExists(configPath))) {
+    console.log('No remote config found.');
+    return;
+  }
+
+  await fs.rm(configPath, { force: true });
+  console.log(`Remote config cleared: ${configPath}`);
+}
+
+async function main(): Promise<void> {
+  const command = parseCommand(process.argv.slice(2));
+
+  if (command.type === 'local-view') {
+    await runLocalView(command.options);
+    return;
+  }
+
+  if (command.type === 'push') {
+    await runPush(command.options);
+    return;
+  }
+
+  if (command.type === 'remote-set') {
+    await runRemoteSet(command.options);
+    return;
+  }
+
+  if (command.type === 'remote-pair') {
+    await runRemotePair(command.options);
+    return;
+  }
+
+  if (command.type === 'remote-clear') {
+    await runRemoteClear();
+    return;
+  }
+
+  await runRemoteShow();
 }
 
 main().catch((error: unknown) => {

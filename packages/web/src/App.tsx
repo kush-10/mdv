@@ -80,6 +80,19 @@ function getFileNameFromPath(inputPath: string): string {
   return parts[parts.length - 1] ?? '';
 }
 
+function getRemoteSlugFromLocation(): string {
+  const match = window.location.pathname.match(/^\/d\/([^/]+)/);
+  if (!match) {
+    return '';
+  }
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return '';
+  }
+}
+
 export function App(): JSX.Element {
   const [markdown, setMarkdown] = useState('');
   const [error, setError] = useState('');
@@ -100,6 +113,10 @@ export function App(): JSX.Element {
   useEffect(() => {
     let isDisposed = false;
     let isLoading = false;
+    const remoteSlug = getRemoteSlugFromLocation();
+    const markdownUrl = remoteSlug
+      ? `/api/markdown?slug=${encodeURIComponent(remoteSlug)}`
+      : '/api/markdown';
 
     const loadMarkdown = async () => {
       if (isLoading || isDisposed) {
@@ -109,7 +126,7 @@ export function App(): JSX.Element {
       isLoading = true;
 
       try {
-        const response = await fetch('/api/markdown', {
+        const response = await fetch(markdownUrl, {
           cache: 'no-store'
         });
 
