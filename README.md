@@ -1,8 +1,19 @@
 # mdv
 
-mdv is a local-first markdown viewer. Open `.md` files in a clean reading UI, then push them to your self-hosted server to get a public URL.
+`mdv` is a local-first Markdown viewer with an optional server mode for sharing public links.
 
-## Installation
+- Read Markdown locally in a clean browser UI.
+- Run `mdv-server` to receive pushes and host public document URLs.
+- Protect admin operations with HTTP Basic Auth.
+
+## What You Get
+
+- `mdv`: local viewing + push workflows.
+- `mdv-server`: self-hosted sharing service.
+- Public document routes at `/d/<id>`.
+- Admin page at `/admin` (lists files and shows current server token/source).
+
+## Install
 
 ```bash
 git clone https://github.com/kush-10/mdv
@@ -12,30 +23,31 @@ bun run setup
 
 `setup` installs dependencies, builds all packages, and installs both global commands (`mdv`, `mdv-server`).
 
-Optional global install command:
-
-```bash
-# Install both mdv and mdv-server
-bun run install:global
-```
-
-These scripts use Bun for workspace install/build, then install binaries globally via npm so `mdv` and `mdv-server` are available on your PATH.
-
-On Linux, if your global npm prefix is not writable, install falls back to `~/.local` automatically.
+If your npm global prefix is not writable (common on Linux), install falls back to `~/.local`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-## Usage
+## Local Mode (No Server)
 
-### 1) View a local markdown file
+Open a Markdown file directly:
 
 ```bash
 mdv README.md
 ```
 
-### 2) Start the self-hosted server
+Useful flags:
+
+```bash
+mdv README.md --port 4174 --no-open
+```
+
+## Server Mode (Share Links)
+
+Server mode is for publishing Markdown to a self-hosted endpoint and getting shareable URLs.
+
+### 1) Start the server
 
 ```bash
 export MDV_ADMIN_USERNAME=admin
@@ -43,43 +55,50 @@ export MDV_ADMIN_PASSWORD='use-a-strong-password'
 mdv-server --port 4173
 ```
 
-On first run, the server generates a secure token and prints a pairing command.
-Admin credentials are required and protect `/admin` and `/api/admin/files` using HTTP Basic Auth.
+Notes:
 
-### 3) Pair your client
+- Admin credentials are required to boot.
+- On first run (without `MDV_SERVER_TOKEN` and without an existing token file), a secure token is generated.
+- Data is stored in `.mdv-server-data` by default.
+
+### 2) Pair your client with the server token
 
 ```bash
 mdv remote pair https://docs.example.com <token>
 ```
 
-### 4) Push a markdown file
+This stores remote + token in your local mdv config.
+
+### 3) Push Markdown to get a public URL
 
 ```bash
 mdv push README.md
 ```
 
-The server returns a random public URL like:
+Example result:
 
-```bash
+```text
 https://docs.example.com/d/<id>
 ```
 
-### Token management
+## Token Management
 
 ```bash
 mdv-server token show
 mdv-server token rotate
 ```
 
-## Docker
+Rotate if a token leaks. Existing clients must pair again after rotation.
 
-1) Create your env file:
+## Docker (Recommended for Hosting)
+
+### 1) Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-2) Set strong secrets in `.env`:
+Set strong values in `.env`:
 
 ```dotenv
 MDV_SERVER_TOKEN=<long-random-token>
@@ -87,22 +106,52 @@ MDV_ADMIN_USERNAME=<admin-username>
 MDV_ADMIN_PASSWORD=<strong-password>
 ```
 
-3) Run with Docker Compose:
+### 2) Start with Docker Compose
 
 ```bash
-docker compose up --build -d
+docker compose up -d --build
 ```
 
-The server runs on `http://localhost:4173` and stores data in a Docker volume.
+Server is available at `http://localhost:4173`. Persistent data is stored in Docker volume `mdv_data` mounted at `/data`.
 
-## Admin page
+### 3) Inspect/rotate token inside the container
+
+```bash
+docker compose exec mdv-server mdv-server token show --data-dir /data
+docker compose exec mdv-server mdv-server token rotate --data-dir /data
+```
+
+If you set `MDV_SERVER_TOKEN` in `.env`, token source reports as `env`.
+
+## Admin Page
 
 - URL: `http://<host>:4173/admin`
 - Auth: HTTP Basic Auth (`MDV_ADMIN_USERNAME` / `MDV_ADMIN_PASSWORD`)
-- View: uploaded file name, document id, created/updated timestamps, and public links
+- Shows: uploaded files, IDs, timestamps, plus current server token and token source
 
-## Public deployment security notes
+## Security Notes
 
-- Always run behind HTTPS (reverse proxy or managed TLS).
-- Use long random secrets for `MDV_SERVER_TOKEN` and admin password.
-- Rotate tokens with `mdv-server token rotate` if leaked.
+- Put the server behind HTTPS for any internet-facing deployment.
+- Use long random values for `MDV_SERVER_TOKEN` and admin password.
+- Rotate token immediately if exposed.
+
+## CLI Reference
+
+`mdv`:
+
+```bash
+mdv <path-to-markdown-file> [--port <number>] [--no-open]
+mdv push <path-to-markdown-file> [--server <url>] [--token <token>]
+mdv remote set <server-url>
+mdv remote pair <server-url> <token>
+mdv remote clear
+mdv remote show
+```
+
+`mdv-server`:
+
+```bash
+mdv-server [--port <number>] [--data-dir <path>]
+mdv-server token show [--data-dir <path>]
+mdv-server token rotate [--data-dir <path>]
+```

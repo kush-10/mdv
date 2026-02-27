@@ -576,6 +576,9 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       main { max-width: 980px; margin: 0 auto; }
       h1 { margin: 0 0 8px; }
       p { margin: 0 0 20px; }
+      .token-panel { margin: 0 0 20px; padding: 12px 14px; border: 1px solid rgba(127, 127, 127, 0.35); border-radius: 8px; }
+      .token-panel p { margin: 0 0 8px; }
+      .token-panel p:last-child { margin-bottom: 0; }
       table { width: 100%; border-collapse: collapse; }
       th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
       code { font-size: 0.9em; }
@@ -586,6 +589,10 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     <main>
       <h1>mdv admin</h1>
       <p>Uploaded files: ${documents.length}</p>
+      <section class="token-panel" aria-label="Server token">
+        <p>Server token: <code>${escapeHtml(config.token)}</code></p>
+        <p>Source: <code>${escapeHtml(config.tokenSource)}</code></p>
+      </section>
       <table>
         <thead>
           <tr>
