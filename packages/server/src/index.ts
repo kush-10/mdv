@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import express from 'express';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,12 +13,35 @@ const __dirname = path.dirname(__filename);
 const WEB_DIST_PATH = path.resolve(__dirname, '../../web/dist');
 const DEFAULT_PORT_RANGE = portNumbers(4173, 4300);
 const TOKEN_FILE_NAME = 'server-token';
+const ADMIN_USERNAME_ENV = 'MDV_ADMIN_USERNAME';
+const ADMIN_PASSWORD_ENV = 'MDV_ADMIN_PASSWORD';
+
+type AdminCredentials = {
+  username: string;
+  password: string;
+};
+
+type DocumentMetadata = {
+  id: string;
+  fileName: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type DocumentListItem = {
+  id: string;
+  fileName: string;
+  createdAt: string;
+  updatedAt: string;
+  path: string;
+};
 
 type StartConfig = {
   port?: number;
   token: string;
   tokenSource: 'env' | 'file' | 'generated';
   dataDir: string;
+  admin: AdminCredentials;
 };
 
 type Command =
@@ -37,6 +60,7 @@ function printUsage(): void {
   console.error('  mdv-server token show [--data-dir <path>]');
   console.error('  mdv-server token rotate [--data-dir <path>]');
   console.error('Optional env override: MDV_SERVER_TOKEN=<bearer-token>');
+  console.error(`Required for /admin: ${ADMIN_USERNAME_ENV}=<username> ${ADMIN_PASSWORD_ENV}=<password>`);
 }
 
 function parseDataDirOption(argv: string[]): string {
@@ -181,6 +205,92 @@ function createDocumentId(): string {
   return randomBytes(12).toString('hex');
 }
 
+function normalizeDisplayFileName(fileName: string | undefined): string {
+  const fallback = 'document.md';
+  if (typeof fileName !== 'string') {
+    return fallback;
+  }
+
+  const normalized = path.basename(fileName).replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  if (!normalized) {
+    return fallback;
+  }
+
+  return normalized.slice(0, 200);
+}
+
+function getDocumentPath(docsDir: string, id: string): string {
+  return path.join(docsDir, `${id}.md`);
+}
+
+function getMetadataPath(docsDir: string, id: string): string {
+  return path.join(docsDir, `${id}.json`);
+}
+
+function toIsoStringFromTimeMs(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return new Date().toISOString();
+  }
+
+  return new Date(value).toISOString();
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function hashSecret(value: string): Buffer {
+  return createHash('sha256').update(value).digest();
+}
+
+function secureCompare(left: string, right: string): boolean {
+  return timingSafeEqual(hashSecret(left), hashSecret(right));
+}
+
+function decodeBasicAuthorization(value: string): { username: string; password: string } | null {
+  if (!value.startsWith('Basic ')) {
+    return null;
+  }
+
+  const encoded = value.slice(6).trim();
+  if (!encoded) {
+    return null;
+  }
+
+  try {
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const separatorIndex = decoded.indexOf(':');
+    if (separatorIndex <= 0) {
+      return null;
+    }
+
+    return {
+      username: decoded.slice(0, separatorIndex),
+      password: decoded.slice(separatorIndex + 1)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveAdminCredentials(): AdminCredentials {
+  const username = (process.env[ADMIN_USERNAME_ENV] ?? '').trim();
+  const password = process.env[ADMIN_PASSWORD_ENV] ?? '';
+
+  if (!username || !password) {
+    throw new Error(
+      `Missing admin credentials. Set both ${ADMIN_USERNAME_ENV} and ${ADMIN_PASSWORD_ENV} environment variables.`
+    );
+  }
+
+  return { username, password };
+}
+
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -236,13 +346,106 @@ async function createUniqueDocumentId(docsDir: string): Promise<string> {
   throw new Error('Failed to allocate unique document id.');
 }
 
+async function writeDocumentMetadata(docsDir: string, metadata: DocumentMetadata): Promise<void> {
+  const metadataPath = getMetadataPath(docsDir, metadata.id);
+  await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
+}
+
+async function readDocumentMetadata(docsDir: string, id: string): Promise<DocumentMetadata | null> {
+  const metadataPath = getMetadataPath(docsDir, id);
+  if (!(await fileExists(metadataPath))) {
+    return null;
+  }
+
+  try {
+    const raw = await fs.readFile(metadataPath, 'utf8');
+    const parsed = JSON.parse(raw) as Partial<DocumentMetadata>;
+    const fileName = normalizeDisplayFileName(parsed.fileName);
+    const createdAt = typeof parsed.createdAt === 'string' && parsed.createdAt ? parsed.createdAt : '';
+    const updatedAt = typeof parsed.updatedAt === 'string' && parsed.updatedAt ? parsed.updatedAt : '';
+
+    return {
+      id,
+      fileName,
+      createdAt: createdAt || new Date().toISOString(),
+      updatedAt: updatedAt || createdAt || new Date().toISOString()
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function listDocuments(docsDir: string): Promise<DocumentListItem[]> {
+  const entries = await fs.readdir(docsDir, { withFileTypes: true });
+  const markdownEntries = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.md'));
+
+  const documents = await Promise.all(
+    markdownEntries.map(async (entry) => {
+      const id = entry.name.slice(0, -3);
+      const docPath = getDocumentPath(docsDir, id);
+      const stats = await fs.stat(docPath);
+      const metadata = await readDocumentMetadata(docsDir, id);
+      const fallbackCreatedAt = toIsoStringFromTimeMs(stats.birthtimeMs || stats.ctimeMs);
+      const fallbackUpdatedAt = toIsoStringFromTimeMs(stats.mtimeMs);
+
+      return {
+        id,
+        fileName: metadata?.fileName ?? `${id}.md`,
+        createdAt: metadata?.createdAt ?? fallbackCreatedAt,
+        updatedAt: metadata?.updatedAt ?? fallbackUpdatedAt,
+        path: `/d/${encodeURIComponent(id)}`
+      } satisfies DocumentListItem;
+    })
+  );
+
+  documents.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+  return documents;
+}
+
+async function readMarkdownWithDisplayName(
+  docsDir: string,
+  id: string
+): Promise<{ markdown: string; displayFileName: string }> {
+  const docPath = getDocumentPath(docsDir, id);
+  const [markdown, metadata] = await Promise.all([
+    fs.readFile(docPath, 'utf8'),
+    readDocumentMetadata(docsDir, id)
+  ]);
+
+  return {
+    markdown,
+    displayFileName: metadata?.fileName ?? `${id}.md`
+  };
+}
+
+function createAdminAuthMiddleware(admin: AdminCredentials): express.RequestHandler {
+  return (req, res, next) => {
+    const credentials = decodeBasicAuthorization(req.get('authorization') ?? '');
+    const isAuthorized =
+      credentials !== null &&
+      secureCompare(credentials.username, admin.username) &&
+      secureCompare(credentials.password, admin.password);
+
+    if (!isAuthorized) {
+      res.setHeader('www-authenticate', 'Basic realm="mdv admin", charset="UTF-8"');
+      res.setHeader('cache-control', 'no-store');
+      res.status(401).send('Unauthorized');
+      return;
+    }
+
+    next();
+  };
+}
+
 async function runStart(commandOptions: { port?: number; dataDir: string }): Promise<void> {
   const resolvedToken = await resolveServerToken(commandOptions.dataDir);
+  const admin = resolveAdminCredentials();
   const config: StartConfig = {
     port: commandOptions.port,
     dataDir: commandOptions.dataDir,
     token: resolvedToken.token,
-    tokenSource: resolvedToken.source
+    tokenSource: resolvedToken.source,
+    admin
   };
 
   await assertBuildExists();
@@ -251,6 +454,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   await fs.mkdir(docsDir, { recursive: true });
 
   const app = express();
+  const requireAdminAuth = createAdminAuthMiddleware(config.admin);
   app.set('trust proxy', true);
   app.use(express.json({ limit: '5mb' }));
 
@@ -273,13 +477,24 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
 
     const id = await createUniqueDocumentId(docsDir);
-    const docPath = path.join(docsDir, `${id}.md`);
+    const docPath = getDocumentPath(docsDir, id);
+    const now = new Date().toISOString();
+    const metadata: DocumentMetadata = {
+      id,
+      fileName: normalizeDisplayFileName(body.fileName),
+      createdAt: now,
+      updatedAt: now
+    };
 
-    await fs.writeFile(docPath, body.markdown, 'utf8');
+    await Promise.all([
+      fs.writeFile(docPath, body.markdown, 'utf8'),
+      writeDocumentMetadata(docsDir, metadata)
+    ]);
 
     const origin = `${req.protocol}://${req.get('host')}`;
     res.json({
       id,
+      fileName: metadata.fileName,
       url: `${origin}/d/${encodeURIComponent(id)}`
     });
   });
@@ -291,11 +506,10 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
-    const docPath = path.join(docsDir, `${id}.md`);
     try {
-      const markdown = await fs.readFile(docPath, 'utf8');
-      res.setHeader('x-md-path', `${id}.md`);
-      res.type('text/plain; charset=utf-8').send(markdown);
+      const document = await readMarkdownWithDisplayName(docsDir, id);
+      res.setHeader('x-md-path', document.displayFileName);
+      res.type('text/plain; charset=utf-8').send(document.markdown);
     } catch {
       res.status(404).json({ error: `Document not found: ${id}` });
     }
@@ -311,13 +525,85 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
-    const docPath = path.join(docsDir, `${id}.md`);
     try {
-      const markdown = await fs.readFile(docPath, 'utf8');
-      res.setHeader('x-md-path', `${id}.md`);
-      res.type('text/plain; charset=utf-8').send(markdown);
+      const document = await readMarkdownWithDisplayName(docsDir, id);
+      res.setHeader('x-md-path', document.displayFileName);
+      res.type('text/plain; charset=utf-8').send(document.markdown);
     } catch {
       res.status(404).json({ error: `Document not found: ${id}` });
+    }
+  });
+
+  app.get('/api/admin/files', requireAdminAuth, async (req, res) => {
+    try {
+      const documents = await listDocuments(docsDir);
+      res.setHeader('cache-control', 'no-store');
+      res.json({
+        files: documents
+      });
+    } catch {
+      res.status(500).json({ error: 'Failed to list files.' });
+    }
+  });
+
+  app.get('/admin', requireAdminAuth, async (req, res) => {
+    try {
+      const documents = await listDocuments(docsDir);
+      const rows =
+        documents.length === 0
+          ? '<tr><td colspan="4" class="empty">No files uploaded yet.</td></tr>'
+          : documents
+              .map(
+                (document) => `<tr>
+      <td><a href="${escapeHtml(document.path)}">${escapeHtml(document.fileName)}</a></td>
+      <td><code>${escapeHtml(document.id)}</code></td>
+      <td>${escapeHtml(new Date(document.createdAt).toLocaleString())}</td>
+      <td>${escapeHtml(new Date(document.updatedAt).toLocaleString())}</td>
+    </tr>`
+              )
+              .join('\n');
+
+      res.setHeader('cache-control', 'no-store');
+      res.type('text/html; charset=utf-8').send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mdv admin</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { margin: 0; padding: 40px 20px; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+      main { max-width: 980px; margin: 0 auto; }
+      h1 { margin: 0 0 8px; }
+      p { margin: 0 0 20px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
+      code { font-size: 0.9em; }
+      .empty { color: #666; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>mdv admin</h1>
+      <p>Uploaded files: ${documents.length}</p>
+      <table>
+        <thead>
+          <tr>
+            <th>File name</th>
+            <th>ID</th>
+            <th>Created</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>`);
+    } catch {
+      res.status(500).type('text/plain; charset=utf-8').send('Failed to render admin page.');
     }
   });
 

@@ -3,6 +3,7 @@ dist/
 .DS_Store
 public/app.js
 *.local
+.env
 
 # Logs
 logs

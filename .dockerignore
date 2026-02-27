@@ -1,0 +1,11 @@
+.git
+.gitignore
+node_modules
+packages/*/dist
+.mdv
+.mdv-server-data
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.local
