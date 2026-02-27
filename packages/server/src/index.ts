@@ -645,7 +645,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   });
 
   const selectedPort = config.port ?? (await getPort({ port: DEFAULT_PORT_RANGE }));
-  const server = app.listen(selectedPort, () => {
+  const server = app.listen(selectedPort, '0.0.0.0', () => {
     const origin = `http://localhost:${selectedPort}`;
     console.log(`mdv-server listening on ${origin}`);
     console.log(`Data dir: ${config.dataDir}`);
