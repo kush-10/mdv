@@ -15,11 +15,13 @@ Optional global commands:
 
 ```bash
 # Default: CLI only
-bun add -g ./packages/cli
+bun run install:cli
 
 # Install both CLI and server
 bun run install:full
 ```
+
+These scripts use Bun for workspace install/build, then install binaries globally via npm so `mdv` and `mdv-server` are available on your PATH.
 
 ## Usage
 

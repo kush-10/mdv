@@ -20,11 +20,10 @@ install:
 	$(BUN) install
 
 add:
-	$(BUN) add -g ./packages/cli
+	$(BUN) run install:cli
 
 add-full:
-	$(BUN) add -g ./packages/cli
-	$(BUN) add -g ./packages/server
+	$(BUN) run install:full
 
 dev:
 	$(BUN) run dev
