@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 
 const WEB_DIST_PATH = path.resolve(__dirname, '../../web/dist');
 const DEFAULT_PORT_RANGE = portNumbers(4173, 4300);
-const CONFIG_DIR_NAME = '.mdv';
+const CONFIG_APP_DIR_NAME = 'mdv';
 const CONFIG_FILE_NAME = 'config.json';
 
 type LocalViewOptions = {
@@ -64,13 +64,38 @@ function printUsage(): void {
   console.error('  mdv remote show');
 }
 
-function getProjectRoot(): string {
-  const initCwd = process.env.INIT_CWD;
-  return initCwd ? path.resolve(initCwd) : process.cwd();
+function getHomeDir(): string {
+  const homeDir = process.env.HOME ?? process.env.USERPROFILE;
+  if (!homeDir) {
+    throw new Error('Unable to resolve home directory for mdv config.');
+  }
+
+  return homeDir;
+}
+
+function getConfigDir(): string {
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA;
+    if (appData) {
+      return path.join(appData, CONFIG_APP_DIR_NAME);
+    }
+
+    return path.join(getHomeDir(), 'AppData', 'Roaming', CONFIG_APP_DIR_NAME);
+  }
+
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+  if (xdgConfigHome) {
+    const baseDir = path.isAbsolute(xdgConfigHome)
+      ? xdgConfigHome
+      : path.resolve(xdgConfigHome);
+    return path.join(baseDir, CONFIG_APP_DIR_NAME);
+  }
+
+  return path.join(getHomeDir(), '.config', CONFIG_APP_DIR_NAME);
 }
 
 function getConfigPath(): string {
-  return path.join(getProjectRoot(), CONFIG_DIR_NAME, CONFIG_FILE_NAME);
+  return path.join(getConfigDir(), CONFIG_FILE_NAME);
 }
 
 function parseLocalViewOptions(argv: string[]): LocalViewOptions {
