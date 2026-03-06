@@ -11,7 +11,7 @@
 - `mdv`: local viewing + push workflows.
 - `mdv-server`: self-hosted sharing service.
 - Public document routes at `/d/<id>`.
-- Admin page at `/admin` (lists files and shows current server token/source).
+- Admin page at `/admin` (lists files, supports permanent delete, shows current server token/source).
 
 ## Install
 
@@ -81,6 +81,10 @@ Example result:
 https://docs.example.com/d/<id>
 ```
 
+## Viewer Shortcuts
+
+- `Cmd+K` (macOS) or `Ctrl+K` (Windows/Linux): open share overlay with QR code and copyable link.
+
 ## Token Management
 
 ```bash
@@ -127,7 +131,8 @@ If you set `MDV_SERVER_TOKEN` in `.env`, token source reports as `env`.
 
 - URL: `http://<host>:4173/admin`
 - Auth: HTTP Basic Auth (`MDV_ADMIN_USERNAME` / `MDV_ADMIN_PASSWORD`)
-- Shows: uploaded files, IDs, timestamps, plus current server token and token source
+- Shows: uploaded files, IDs, timestamps, delete actions, plus current server token and token source
+- Delete is permanent (markdown + metadata are removed immediately)
 
 ## Security Notes
 

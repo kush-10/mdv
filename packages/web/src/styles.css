@@ -6,6 +6,9 @@
   --code-bg: #ecece8;
   --inline-code-bg: #ecece8;
   --inline-code-text: #101010;
+  --overlay-backdrop: rgba(242, 242, 235, 0.58);
+  --overlay-surface: rgba(255, 255, 255, 0.9);
+  --overlay-shadow: 0 24px 56px rgba(0, 0, 0, 0.22);
   color-scheme: light;
 }
 
@@ -17,6 +20,9 @@
   --code-bg: #141414;
   --inline-code-bg: #171717;
   --inline-code-text: #ececec;
+  --overlay-backdrop: rgba(0, 0, 0, 0.6);
+  --overlay-surface: rgba(20, 20, 20, 0.88);
+  --overlay-shadow: 0 30px 70px rgba(0, 0, 0, 0.6);
   color-scheme: dark;
 }
 
@@ -57,6 +63,10 @@ body {
   cursor: pointer;
 }
 
+.theme-toggle:hover {
+  background: var(--code-bg);
+}
+
 .top-bar {
   position: fixed;
   top: 0;
@@ -71,6 +81,28 @@ body {
   background: var(--bg);
 }
 
+.top-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.share-toggle {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 9999px;
+  height: 2.5rem;
+  padding: 0 0.95rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.share-toggle:hover {
+  background: var(--code-bg);
+}
+
 .file-path {
   min-width: 0;
   max-width: min(75vw, 980px);
@@ -83,6 +115,137 @@ body {
 
 .theme-icon {
   line-height: 1;
+}
+
+.share-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: var(--overlay-backdrop);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.share-dialog {
+  position: relative;
+  width: min(560px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 1.15rem 1.15rem 1rem;
+  background: var(--overlay-surface);
+  box-shadow: var(--overlay-shadow);
+}
+
+.share-dialog h2 {
+  margin: 0;
+  font-size: 1.3rem;
+  line-height: 1.25;
+}
+
+.share-description {
+  margin: 0.3rem 0 0.95rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.share-close {
+  position: absolute;
+  right: 0.75rem;
+  top: 0.7rem;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: transparent;
+  color: inherit;
+  line-height: 1;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.share-close:hover {
+  background: var(--code-bg);
+}
+
+.share-qr-shell {
+  width: min(280px, 100%);
+  margin: 0 auto 1rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.share-qr-shell img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+}
+
+.share-qr-message {
+  margin: 0;
+  min-height: 280px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  line-height: 1.35;
+  color: #444444;
+}
+
+.share-qr-message.is-error {
+  color: #a51a1a;
+}
+
+.share-url-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.share-url-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.58rem 0.72rem;
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  color: inherit;
+  font-size: 0.9rem;
+}
+
+.share-copy {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.58rem 0.8rem;
+  min-width: 92px;
+  background: var(--bg);
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.share-copy:hover {
+  background: var(--code-bg);
+}
+
+.share-meta {
+  margin: 0.72rem 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.share-meta kbd {
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 0.05rem 0.35rem;
+  background: var(--code-bg);
 }
 
 .toc-rail {
@@ -311,6 +474,25 @@ body {
 }
 
 @media (max-width: 900px) {
+  .top-bar {
+    padding: 0.65rem 0.9rem;
+  }
+
+  .file-path {
+    max-width: min(58vw, 620px);
+  }
+
+  .share-toggle {
+    height: 2.35rem;
+    padding: 0 0.8rem;
+    font-size: 0.82rem;
+  }
+
+  .theme-toggle {
+    width: 2.35rem;
+    height: 2.35rem;
+  }
+
   .toc-rail {
     right: 12px;
   }
@@ -329,6 +511,26 @@ body {
 
   .markdown-body {
     margin-left: 0;
+  }
+
+  .share-dialog {
+    border-radius: 15px;
+  }
+
+  .share-url-row {
+    flex-direction: column;
+  }
+
+  .share-copy {
+    width: 100%;
+  }
+
+  .share-qr-shell {
+    max-width: 240px;
+  }
+
+  .share-qr-message {
+    min-height: 240px;
   }
 
   body {

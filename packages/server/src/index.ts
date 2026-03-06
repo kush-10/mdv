@@ -418,6 +418,20 @@ async function readMarkdownWithDisplayName(
   };
 }
 
+async function deleteDocument(docsDir: string, id: string): Promise<boolean> {
+  const docPath = getDocumentPath(docsDir, id);
+  if (!(await fileExists(docPath))) {
+    return false;
+  }
+
+  await Promise.all([
+    fs.rm(docPath),
+    fs.rm(getMetadataPath(docsDir, id), { force: true })
+  ]);
+
+  return true;
+}
+
 function createAdminAuthMiddleware(admin: AdminCredentials): express.RequestHandler {
   return (req, res, next) => {
     const credentials = decodeBasicAuthorization(req.get('authorization') ?? '');
@@ -546,21 +560,79 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
   });
 
+  app.delete('/api/admin/files/:id', requireAdminAuth, async (req, res) => {
+    const id = normalizeDocumentId(typeof req.params.id === 'string' ? req.params.id : '');
+    if (!id) {
+      res.status(400).json({ error: 'Invalid document id.' });
+      return;
+    }
+
+    try {
+      const wasDeleted = await deleteDocument(docsDir, id);
+      if (!wasDeleted) {
+        res.status(404).json({ error: `Document not found: ${id}` });
+        return;
+      }
+
+      res.json({ ok: true, id });
+    } catch {
+      res.status(500).json({ error: 'Failed to delete file.' });
+    }
+  });
+
+  app.post('/admin/files/:id/delete', requireAdminAuth, async (req, res) => {
+    const id = normalizeDocumentId(typeof req.params.id === 'string' ? req.params.id : '');
+    if (!id) {
+      res.redirect(303, '/admin?status=invalid-id');
+      return;
+    }
+
+    try {
+      const wasDeleted = await deleteDocument(docsDir, id);
+      if (!wasDeleted) {
+        res.redirect(303, '/admin?status=not-found');
+        return;
+      }
+
+      res.redirect(303, `/admin?status=deleted&id=${encodeURIComponent(id)}`);
+    } catch {
+      res.redirect(303, '/admin?status=delete-error');
+    }
+  });
+
   app.get('/admin', requireAdminAuth, async (req, res) => {
     try {
+      const status = typeof req.query.status === 'string' ? req.query.status : '';
+      const statusId = typeof req.query.id === 'string' ? normalizeDocumentId(req.query.id) : '';
       const documents = await listDocuments(docsDir);
+      const statusMessage =
+        status === 'deleted' && statusId
+          ? `<p class="notice success">Deleted document <code>${escapeHtml(statusId)}</code>.</p>`
+          : status === 'not-found'
+            ? '<p class="notice error">Document not found. It may have already been deleted.</p>'
+            : status === 'invalid-id'
+              ? '<p class="notice error">Invalid document id.</p>'
+              : status === 'delete-error'
+                ? '<p class="notice error">Failed to delete document.</p>'
+                : '';
       const rows =
         documents.length === 0
-          ? '<tr><td colspan="4" class="empty">No files uploaded yet.</td></tr>'
+          ? '<tr><td colspan="5" class="empty">No files uploaded yet.</td></tr>'
           : documents
-              .map(
-                (document) => `<tr>
+              .map((document) => {
+                const deletePath = `/admin/files/${encodeURIComponent(document.id)}/delete`;
+                return `<tr>
       <td><a href="${escapeHtml(document.path)}">${escapeHtml(document.fileName)}</a></td>
       <td><code>${escapeHtml(document.id)}</code></td>
       <td>${escapeHtml(new Date(document.createdAt).toLocaleString())}</td>
       <td>${escapeHtml(new Date(document.updatedAt).toLocaleString())}</td>
-    </tr>`
-              )
+      <td class="actions">
+        <form method="post" action="${escapeHtml(deletePath)}" onsubmit="return window.confirm('Delete this page permanently?');">
+          <button type="submit" class="danger">Delete</button>
+        </form>
+      </td>
+    </tr>`;
+              })
               .join('\n');
 
       res.setHeader('cache-control', 'no-store');
@@ -576,11 +648,18 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       main { max-width: 980px; margin: 0 auto; }
       h1 { margin: 0 0 8px; }
       p { margin: 0 0 20px; }
+      .notice { margin: 0 0 18px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(127, 127, 127, 0.45); }
+      .notice.success { border-color: rgba(15, 140, 74, 0.55); }
+      .notice.error { border-color: rgba(168, 34, 34, 0.6); }
       .token-panel { margin: 0 0 20px; padding: 12px 14px; border: 1px solid rgba(127, 127, 127, 0.35); border-radius: 8px; }
       .token-panel p { margin: 0 0 8px; }
       .token-panel p:last-child { margin-bottom: 0; }
       table { width: 100%; border-collapse: collapse; }
       th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
+      th:last-child, td:last-child { text-align: right; }
+      .actions form { margin: 0; }
+      .danger { border: 1px solid rgba(168, 34, 34, 0.7); border-radius: 8px; background: transparent; color: inherit; padding: 6px 10px; cursor: pointer; }
+      .danger:hover { background: rgba(168, 34, 34, 0.16); }
       code { font-size: 0.9em; }
       .empty { color: #666; text-align: center; }
     </style>
@@ -589,6 +668,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     <main>
       <h1>mdv admin</h1>
       <p>Uploaded files: ${documents.length}</p>
+      ${statusMessage}
       <section class="token-panel" aria-label="Server token">
         <p>Server token: <code>${escapeHtml(config.token)}</code></p>
         <p>Source: <code>${escapeHtml(config.tokenSource)}</code></p>
@@ -600,6 +680,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
             <th>ID</th>
             <th>Created</th>
             <th>Updated</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>

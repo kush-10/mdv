@@ -1,4 +1,5 @@
 import { createElement, useEffect, useMemo, useRef, useState } from 'react';
+import QRCode from 'qrcode';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ThemeAnimationType, useModeAnimation } from 'react-theme-switch-animation';
@@ -93,15 +94,65 @@ function getRemoteSlugFromLocation(): string {
   }
 }
 
+function getShareUrlFromLocation(): string {
+  return `${window.location.origin}${window.location.pathname}${window.location.search}`;
+}
+
+function isEditableElement(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName;
+  return (
+    target.isContentEditable ||
+    tagName === 'INPUT' ||
+    tagName === 'TEXTAREA' ||
+    tagName === 'SELECT'
+  );
+}
+
+async function copyTextToClipboard(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const tempTextArea = document.createElement('textarea');
+  tempTextArea.value = value;
+  tempTextArea.setAttribute('readonly', 'true');
+  tempTextArea.style.position = 'fixed';
+  tempTextArea.style.opacity = '0';
+  tempTextArea.style.pointerEvents = 'none';
+  document.body.appendChild(tempTextArea);
+  tempTextArea.select();
+
+  const didCopy = document.execCommand('copy');
+  document.body.removeChild(tempTextArea);
+
+  if (!didCopy) {
+    throw new Error('Clipboard copy failed.');
+  }
+}
+
 export function App(): JSX.Element {
   const [markdown, setMarkdown] = useState('');
   const [error, setError] = useState('');
   const [filePath, setFilePath] = useState('');
   const [activeHeadingId, setActiveHeadingId] = useState('');
   const [hoveredHeadingId, setHoveredHeadingId] = useState('');
+  const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
+  const [shareUrl, setShareUrl] = useState(() => getShareUrlFromLocation());
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
+  const [qrCodeError, setQrCodeError] = useState('');
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const markdownRef = useRef('');
+  const shareUrlInputRef = useRef<HTMLInputElement | null>(null);
 
   const headings = useMemo(() => extractHeadings(markdown), [markdown]);
+  const shareShortcutLabel = useMemo(() => {
+    return /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'Cmd+K' : 'Ctrl+K';
+  }, []);
 
   const { ref, toggleSwitchTheme, isDarkMode } = useModeAnimation({
     animationType: ThemeAnimationType.CIRCLE,
@@ -179,6 +230,101 @@ export function App(): JSX.Element {
   }, [filePath]);
 
   useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+
+      if ((event.metaKey || event.ctrlKey) && key === 'k') {
+        if (isEditableElement(event.target)) {
+          return;
+        }
+
+        event.preventDefault();
+        setIsShareDialogOpen((isOpen) => !isOpen);
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        setIsShareDialogOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isShareDialogOpen) {
+      return;
+    }
+
+    setShareUrl(getShareUrlFromLocation());
+    setCopyStatus('idle');
+
+    const timer = window.setTimeout(() => {
+      shareUrlInputRef.current?.focus();
+      shareUrlInputRef.current?.select();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [isShareDialogOpen]);
+
+  useEffect(() => {
+    if (!isShareDialogOpen) {
+      return;
+    }
+
+    let isDisposed = false;
+    setQrCodeDataUrl('');
+    setQrCodeError('');
+
+    const generateQrCode = async () => {
+      try {
+        const dataUrl = await QRCode.toDataURL(shareUrl, {
+          width: 280,
+          margin: 1,
+          errorCorrectionLevel: 'M',
+          color: {
+            dark: '#111111',
+            light: '#FFFFFF'
+          }
+        });
+
+        if (!isDisposed) {
+          setQrCodeDataUrl(dataUrl);
+        }
+      } catch {
+        if (!isDisposed) {
+          setQrCodeError('Unable to generate QR code.');
+        }
+      }
+    };
+
+    void generateQrCode();
+
+    return () => {
+      isDisposed = true;
+    };
+  }, [isShareDialogOpen, shareUrl]);
+
+  useEffect(() => {
+    if (copyStatus !== 'copied') {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setCopyStatus('idle');
+    }, 1400);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [copyStatus]);
+
+  useEffect(() => {
     if (headings.length === 0) {
       setActiveHeadingId('');
       return;
@@ -223,23 +369,48 @@ export function App(): JSX.Element {
       return createElement(tag, { id, ...props });
     };
 
+  const closeShareDialog = () => {
+    setIsShareDialogOpen(false);
+  };
+
+  const handleShareCopy = async () => {
+    try {
+      await copyTextToClipboard(shareUrl);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('error');
+    }
+  };
+
   return (
     <>
       <header className="top-bar">
         <div className="file-path" title={filePath || 'Loading markdown path...'}>
           {filePath || 'Loading markdown path...'}
         </div>
-        <button
-          ref={ref}
-          type="button"
-          className="theme-toggle"
-          aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-          onClick={toggleSwitchTheme}
-        >
-          <span aria-hidden="true" className="theme-icon">
-            {isDarkMode ? '☀' : '☾'}
-          </span>
-        </button>
+        <div className="top-bar-actions">
+          <button
+            type="button"
+            className="share-toggle"
+            aria-label={`Share this page (${shareShortcutLabel})`}
+            aria-haspopup="dialog"
+            aria-expanded={isShareDialogOpen}
+            onClick={() => setIsShareDialogOpen(true)}
+          >
+            Share
+          </button>
+          <button
+            ref={ref}
+            type="button"
+            className="theme-toggle"
+            aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            onClick={toggleSwitchTheme}
+          >
+            <span aria-hidden="true" className="theme-icon">
+              {isDarkMode ? '☀' : '☾'}
+            </span>
+          </button>
+        </div>
       </header>
 
       {headings.length > 0 ? (
@@ -262,6 +433,59 @@ export function App(): JSX.Element {
             ))}
           </ul>
         </aside>
+      ) : null}
+
+      {isShareDialogOpen ? (
+        <div className="share-overlay" role="presentation" onClick={closeShareDialog}>
+          <section
+            className="share-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="share-dialog-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="share-close"
+              aria-label="Close share dialog"
+              onClick={closeShareDialog}
+            >
+              x
+            </button>
+            <h2 id="share-dialog-title">Share this page</h2>
+            <p className="share-description">Scan the QR code or copy the link.</p>
+
+            <div className="share-qr-shell">
+              {qrCodeDataUrl ? (
+                <img src={qrCodeDataUrl} alt="QR code for this page" />
+              ) : qrCodeError ? (
+                <p className="share-qr-message is-error">{qrCodeError}</p>
+              ) : (
+                <p className="share-qr-message">Generating QR code...</p>
+              )}
+            </div>
+
+            <div className="share-url-row">
+              <input
+                ref={shareUrlInputRef}
+                type="text"
+                className="share-url-input"
+                value={shareUrl}
+                readOnly
+                onFocus={(event) => event.currentTarget.select()}
+                aria-label="Shareable link"
+              />
+              <button type="button" className="share-copy" onClick={handleShareCopy}>
+                {copyStatus === 'copied' ? 'Copied' : 'Copy link'}
+              </button>
+            </div>
+
+            <p className="share-meta">
+              Shortcut: <kbd>{shareShortcutLabel}</kbd>
+              {copyStatus === 'error' ? ' - Clipboard unavailable.' : ''}
+            </p>
+          </section>
+        </div>
       ) : null}
 
       <main className="reading-view" aria-live="polite">
