@@ -144,6 +144,44 @@ function getShareUrlFromLocation(): string {
   return `${window.location.origin}${window.location.pathname}${window.location.search}`;
 }
 
+function getPdfDownloadUrl(remoteSlug: string): string {
+  if (!remoteSlug) {
+    return '/api/markdown/pdf';
+  }
+
+  return `/api/markdown/${encodeURIComponent(remoteSlug)}/pdf`;
+}
+
+function getFallbackPdfFileName(inputPath: string): string {
+  const fileName = getFileNameFromPath(inputPath);
+  const withoutExtension = fileName.replace(/\.[^.]+$/, '').trim();
+  const baseName = withoutExtension || 'document';
+  const safeName = baseName.replace(/[\\/:*?"<>|]/g, '-');
+  return `${safeName}.pdf`;
+}
+
+function getPdfFileNameFromContentDisposition(contentDisposition: string | null, fallbackPath: string): string {
+  if (contentDisposition) {
+    const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+      const decoded = decodeURIComponent(utf8Match[1]).trim();
+      if (decoded) {
+        return decoded;
+      }
+    }
+
+    const fallbackMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+    if (fallbackMatch?.[1]) {
+      const parsed = fallbackMatch[1].trim();
+      if (parsed) {
+        return parsed;
+      }
+    }
+  }
+
+  return getFallbackPdfFileName(fallbackPath);
+}
+
 function isEditableElement(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -193,12 +231,17 @@ export function App(): JSX.Element {
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [qrCodeError, setQrCodeError] = useState('');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [isPdfDownloading, setIsPdfDownloading] = useState(false);
   const markdownRef = useRef('');
   const shareUrlInputRef = useRef<HTMLInputElement | null>(null);
+
+  const remoteSlug = useMemo(() => getRemoteSlugFromLocation(), []);
 
   const shareShortcutLabel = useMemo(() => {
     return /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'Cmd+K' : 'Ctrl+K';
   }, []);
+
+  const pdfDownloadUrl = useMemo(() => getPdfDownloadUrl(remoteSlug), [remoteSlug]);
 
   const { ref, toggleSwitchTheme, isDarkMode } = useModeAnimation({
     animationType: ThemeAnimationType.CIRCLE,
@@ -210,7 +253,6 @@ export function App(): JSX.Element {
   useEffect(() => {
     let isDisposed = false;
     let isLoading = false;
-    const remoteSlug = getRemoteSlugFromLocation();
     const markdownUrl = remoteSlug
       ? `/api/markdown?slug=${encodeURIComponent(remoteSlug)}`
       : '/api/markdown';
@@ -268,7 +310,7 @@ export function App(): JSX.Element {
       isDisposed = true;
       window.clearInterval(refreshTimer);
     };
-  }, []);
+  }, [remoteSlug]);
 
   useEffect(() => {
     const fileName = getFileNameFromPath(filePath);
@@ -433,6 +475,45 @@ export function App(): JSX.Element {
     }
   };
 
+  const handlePdfDownload = async () => {
+    if (isPdfDownloading) {
+      return;
+    }
+
+    setIsPdfDownloading(true);
+
+    try {
+      const response = await fetch(pdfDownloadUrl, {
+        cache: 'no-store'
+      });
+
+      if (!response.ok) {
+        throw new Error(`PDF request failed with status ${response.status}`);
+      }
+
+      const pdfBlob = await response.blob();
+      const blobUrl = URL.createObjectURL(pdfBlob);
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.href = blobUrl;
+      downloadAnchor.download = getPdfFileNameFromContentDisposition(
+        response.headers.get('content-disposition'),
+        filePath
+      );
+
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      document.body.removeChild(downloadAnchor);
+
+      window.setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 1000);
+    } catch {
+      return;
+    } finally {
+      setIsPdfDownloading(false);
+    }
+  };
+
   return (
     <>
       <header className="top-bar">
@@ -449,6 +530,17 @@ export function App(): JSX.Element {
             onClick={() => setIsShareDialogOpen(true)}
           >
             Share
+          </button>
+          <button
+            type="button"
+            className="pdf-download"
+            aria-label={isPdfDownloading ? 'Generating PDF' : 'Download PDF'}
+            onClick={() => {
+              void handlePdfDownload();
+            }}
+            disabled={isPdfDownloading}
+          >
+            {isPdfDownloading ? 'PDF...' : 'PDF'}
           </button>
           <button
             ref={ref}

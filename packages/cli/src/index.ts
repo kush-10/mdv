@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import getPort, { portNumbers } from 'get-port';
 import open from 'open';
+import { renderMarkdownToPdf } from './pdf.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -118,6 +119,19 @@ function normalizePushMap(value: unknown): PushMap {
 
 function createPushTrackingKey(serverUrl: string, markdownPath: string): string {
   return `${serverUrl}::${markdownPath}`;
+}
+
+function toPdfFileName(fileName: string): string {
+  const withoutExtension = fileName.replace(/\.[^.]+$/, '').trim();
+  const baseName = withoutExtension || 'document';
+  const safeName = baseName.replace(/[\\/:*?"<>|]/g, '-');
+  return `${safeName}.pdf`;
+}
+
+function toPdfContentDisposition(fileName: string): string {
+  const fallbackAscii = fileName.replace(/[\u0080-\uffff]/g, '').replace(/["\\]/g, '').trim();
+  const fallback = fallbackAscii || 'document.pdf';
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }
 
 function parseLocalViewOptions(argv: string[]): LocalViewOptions {
@@ -404,6 +418,26 @@ async function runLocalView(options: LocalViewOptions): Promise<void> {
   await assertBuildExists();
 
   const app = express();
+
+  app.get('/api/markdown/pdf', async (_req, res) => {
+    try {
+      const markdownContent = await fs.readFile(markdownPath, 'utf8');
+      const displayName = path.basename(markdownPath);
+      const pdf = await renderMarkdownToPdf({
+        markdown: markdownContent,
+        title: displayName,
+        sourceDir: path.dirname(markdownPath)
+      });
+
+      res.setHeader('cache-control', 'no-store');
+      res.setHeader('content-disposition', toPdfContentDisposition(toPdfFileName(displayName)));
+      res.type('application/pdf').send(pdf);
+    } catch {
+      res.status(500).json({
+        error: 'Failed to generate PDF. Ensure Chromium is installed (`bunx playwright install chromium`).'
+      });
+    }
+  });
 
   app.get('/api/markdown', async (_req, res) => {
     try {

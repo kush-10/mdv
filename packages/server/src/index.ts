@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import getPort, { portNumbers } from 'get-port';
+import { renderMarkdownToPdf } from './pdf.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -344,6 +345,31 @@ function parseIdFromReferer(refererHeader: string | undefined): string | null {
   }
 }
 
+function resolveRequestedDocumentId(req: express.Request): string {
+  const fromIdQuery = typeof req.query.id === 'string' ? req.query.id : '';
+  const fromLegacySlugQuery = typeof req.query.slug === 'string' ? req.query.slug : '';
+  const fromReferer = parseIdFromReferer(req.get('referer'));
+  return normalizeDocumentId(fromIdQuery || fromLegacySlugQuery || fromReferer || '');
+}
+
+function toPdfFileName(fileName: string): string {
+  const normalized = normalizeDisplayFileName(fileName);
+  const withoutExtension = normalized.replace(/\.[^.]+$/, '').trim();
+  const baseName = withoutExtension || 'document';
+  const safeName = baseName.replace(/[\\/:*?"<>|]/g, '-');
+  return `${safeName}.pdf`;
+}
+
+function toPdfContentDisposition(fileName: string): string {
+  const fallbackAscii = fileName.replace(/[\u0080-\uffff]/g, '').replace(/["\\]/g, '').trim();
+  const fallback = fallbackAscii || 'document.pdf';
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
+function isNotFoundError(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
+}
+
 async function createUniqueDocumentId(docsDir: string): Promise<string> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const id = createDocumentId();
@@ -425,6 +451,23 @@ async function readMarkdownWithDisplayName(
   return {
     markdown,
     displayFileName: metadata?.fileName ?? `${id}.md`
+  };
+}
+
+async function renderDocumentPdf(
+  docsDir: string,
+  id: string
+): Promise<{ pdf: Buffer; fileName: string }> {
+  const document = await readMarkdownWithDisplayName(docsDir, id);
+  const pdf = await renderMarkdownToPdf({
+    markdown: document.markdown,
+    title: document.displayFileName,
+    sourceDir: docsDir
+  });
+
+  return {
+    pdf,
+    fileName: toPdfFileName(document.displayFileName)
   };
 }
 
@@ -593,6 +636,44 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     });
   });
 
+  const sendPdfResponse = async (res: express.Response, id: string): Promise<void> => {
+    try {
+      const output = await renderDocumentPdf(docsDir, id);
+      res.setHeader('cache-control', 'no-store');
+      res.setHeader('content-disposition', toPdfContentDisposition(output.fileName));
+      res.type('application/pdf').send(output.pdf);
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        res.status(404).json({ error: `Document not found: ${id}` });
+        return;
+      }
+
+      res.status(500).json({
+        error: 'Failed to generate PDF. Ensure Chromium is installed (`bunx playwright install chromium`).'
+      });
+    }
+  };
+
+  app.get('/api/markdown/:id/pdf', async (req, res) => {
+    const id = normalizeDocumentId(req.params.id ?? '');
+    if (!id) {
+      res.status(400).json({ error: 'Invalid document id.' });
+      return;
+    }
+
+    await sendPdfResponse(res, id);
+  });
+
+  app.get('/api/markdown/pdf', async (req, res) => {
+    const id = resolveRequestedDocumentId(req);
+    if (!id) {
+      res.status(400).json({ error: 'Missing id. Open a public document URL at /d/<id>.' });
+      return;
+    }
+
+    await sendPdfResponse(res, id);
+  });
+
   app.get('/api/markdown/:id', async (req, res) => {
     const id = normalizeDocumentId(req.params.id ?? '');
     if (!id) {
@@ -610,10 +691,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   });
 
   app.get('/api/markdown', async (req, res) => {
-    const fromIdQuery = typeof req.query.id === 'string' ? req.query.id : '';
-    const fromLegacySlugQuery = typeof req.query.slug === 'string' ? req.query.slug : '';
-    const fromReferer = parseIdFromReferer(req.get('referer'));
-    const id = normalizeDocumentId(fromIdQuery || fromLegacySlugQuery || fromReferer || '');
+    const id = resolveRequestedDocumentId(req);
     if (!id) {
       res.status(400).json({ error: 'Missing id. Open a public document URL at /d/<id>.' });
       return;

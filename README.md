@@ -23,6 +23,12 @@ bun run setup
 
 `setup` installs dependencies, builds all packages, and installs both global commands (`mdv`, `mdv-server`).
 
+Install Chromium once if you want one-click PDF export from the viewer:
+
+```bash
+bunx playwright install chromium
+```
+
 If your npm global prefix is not writable (common on Linux), install falls back to `~/.local`:
 
 ```bash
@@ -89,6 +95,10 @@ Push behavior:
 ## Viewer Shortcuts
 
 - `Cmd+K` (macOS) or `Ctrl+K` (Windows/Linux): open share overlay with QR code and copyable link.
+
+## Viewer Export
+
+- `PDF` button in the top bar downloads a PDF generated server-side from the raw markdown source.
 
 ## Markdown Support
 
