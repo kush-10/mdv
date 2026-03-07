@@ -50,8 +50,15 @@ type Command =
   | { type: 'token-rotate'; dataDir: string };
 
 type PushBody = {
+  id?: string;
   fileName?: string;
   markdown?: string;
+};
+
+type PushResult = {
+  id: string;
+  fileName: string;
+  created: boolean;
 };
 
 function printUsage(): void {
@@ -418,6 +425,71 @@ async function readMarkdownWithDisplayName(
   };
 }
 
+async function writePushedDocument(
+  docsDir: string,
+  markdown: string,
+  fileName: string | undefined,
+  requestedId: string
+): Promise<PushResult> {
+  const normalizedFileName = normalizeDisplayFileName(fileName);
+  const now = new Date().toISOString();
+
+  if (requestedId) {
+    const existingDocPath = getDocumentPath(docsDir, requestedId);
+    if (await fileExists(existingDocPath)) {
+      const existingMetadata = await readDocumentMetadata(docsDir, requestedId);
+      let createdAt = existingMetadata?.createdAt ?? now;
+
+      if (!existingMetadata) {
+        try {
+          const stats = await fs.stat(existingDocPath);
+          createdAt = toIsoStringFromTimeMs(stats.birthtimeMs || stats.ctimeMs);
+        } catch {
+          createdAt = now;
+        }
+      }
+
+      const updatedMetadata: DocumentMetadata = {
+        id: requestedId,
+        fileName: normalizedFileName,
+        createdAt,
+        updatedAt: now
+      };
+
+      await Promise.all([
+        fs.writeFile(existingDocPath, markdown, 'utf8'),
+        writeDocumentMetadata(docsDir, updatedMetadata)
+      ]);
+
+      return {
+        id: requestedId,
+        fileName: normalizedFileName,
+        created: false
+      };
+    }
+  }
+
+  const id = await createUniqueDocumentId(docsDir);
+  const docPath = getDocumentPath(docsDir, id);
+  const metadata: DocumentMetadata = {
+    id,
+    fileName: normalizedFileName,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  await Promise.all([
+    fs.writeFile(docPath, markdown, 'utf8'),
+    writeDocumentMetadata(docsDir, metadata)
+  ]);
+
+  return {
+    id,
+    fileName: normalizedFileName,
+    created: true
+  };
+}
+
 async function deleteDocument(docsDir: string, id: string): Promise<boolean> {
   const docPath = getDocumentPath(docsDir, id);
   if (!(await fileExists(docPath))) {
@@ -490,26 +562,31 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
-    const id = await createUniqueDocumentId(docsDir);
-    const docPath = getDocumentPath(docsDir, id);
-    const now = new Date().toISOString();
-    const metadata: DocumentMetadata = {
-      id,
-      fileName: normalizeDisplayFileName(body.fileName),
-      createdAt: now,
-      updatedAt: now
-    };
+    const requestedId = typeof body.id === 'string' ? normalizeDocumentId(body.id) : '';
+    if (typeof body.id === 'string' && !requestedId) {
+      res.status(400).json({ error: 'Body `id` must be a valid document id.' });
+      return;
+    }
 
-    await Promise.all([
-      fs.writeFile(docPath, body.markdown, 'utf8'),
-      writeDocumentMetadata(docsDir, metadata)
-    ]);
+    let pushResult: PushResult;
+    try {
+      pushResult = await writePushedDocument(
+        docsDir,
+        body.markdown,
+        body.fileName,
+        requestedId
+      );
+    } catch {
+      res.status(500).json({ error: 'Failed to persist markdown document.' });
+      return;
+    }
 
     const origin = `${req.protocol}://${req.get('host')}`;
     res.json({
-      id,
-      fileName: metadata.fileName,
-      url: `${origin}/d/${encodeURIComponent(id)}`
+      id: pushResult.id,
+      fileName: pushResult.fileName,
+      created: pushResult.created,
+      url: `${origin}/d/${encodeURIComponent(pushResult.id)}`
     });
   });
 

@@ -14,6 +14,7 @@ const WEB_DIST_PATH = path.resolve(__dirname, '../../web/dist');
 const DEFAULT_PORT_RANGE = portNumbers(4173, 4300);
 const CONFIG_APP_DIR_NAME = 'mdv';
 const CONFIG_FILE_NAME = 'config.json';
+const DOCUMENT_ID_PATTERN = /^[a-z0-9_-]{1,64}$/;
 
 type LocalViewOptions = {
   markdownPathArg?: string;
@@ -47,11 +48,15 @@ type Command =
 type PushResponse = {
   id: string;
   url: string;
+  created?: boolean;
 };
+
+type PushMap = Record<string, string>;
 
 type MdvConfig = {
   remote?: string;
   token?: string;
+  pushMap?: PushMap;
 };
 
 function printUsage(): void {
@@ -96,6 +101,23 @@ function getConfigDir(): string {
 
 function getConfigPath(): string {
   return path.join(getConfigDir(), CONFIG_FILE_NAME);
+}
+
+function normalizePushMap(value: unknown): PushMap {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .map(([key, id]) => [key, id.trim()] as const)
+    .filter(([, id]) => DOCUMENT_ID_PATTERN.test(id));
+
+  return Object.fromEntries(entries);
+}
+
+function createPushTrackingKey(serverUrl: string, markdownPath: string): string {
+  return `${serverUrl}::${markdownPath}`;
 }
 
 function parseLocalViewOptions(argv: string[]): LocalViewOptions {
@@ -316,14 +338,41 @@ async function readConfig(): Promise<MdvConfig> {
   }
 
   const raw = await fs.readFile(configPath, 'utf8');
-  const parsed = JSON.parse(raw) as MdvConfig;
-  return parsed;
+  const parsed = JSON.parse(raw) as unknown;
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {};
+  }
+
+  const parsedConfig = parsed as Record<string, unknown>;
+  const config: MdvConfig = {};
+  if (typeof parsedConfig.remote === 'string') {
+    config.remote = parsedConfig.remote;
+  }
+
+  if (typeof parsedConfig.token === 'string') {
+    config.token = parsedConfig.token;
+  }
+
+  const pushMap = normalizePushMap(parsedConfig.pushMap);
+  if (Object.keys(pushMap).length > 0) {
+    config.pushMap = pushMap;
+  }
+
+  return config;
 }
 
 async function writeConfig(config: MdvConfig): Promise<void> {
   const configPath = getConfigPath();
+  const pushMap = normalizePushMap(config.pushMap);
+  const serializableConfig: MdvConfig = {
+    ...(typeof config.remote === 'string' ? { remote: config.remote } : {}),
+    ...(typeof config.token === 'string' ? { token: config.token } : {}),
+    ...(Object.keys(pushMap).length > 0 ? { pushMap } : {})
+  };
+
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  await fs.writeFile(configPath, `${JSON.stringify(serializableConfig, null, 2)}\n`, 'utf8');
 }
 
 async function resolveServerUrl(serverFromFlag: string | undefined): Promise<string> {
@@ -430,9 +479,24 @@ async function runPush(options: PushOptions): Promise<void> {
   const serverUrl = await resolveServerUrl(options.server);
   const config = await readConfig();
   const token = options.token ?? process.env.MDV_TOKEN ?? config.token;
+  const trackingKey = createPushTrackingKey(serverUrl, markdownPath);
+  const trackedId = config.pushMap?.[trackingKey];
 
   if (!token) {
     throw new Error('Missing bearer token. Set with `mdv remote pair <server-url> <token>`, `MDV_TOKEN`, or `--token <token>`.');
+  }
+
+  const pushPayload: {
+    fileName: string;
+    markdown: string;
+    id?: string;
+  } = {
+    fileName: path.basename(markdownPath),
+    markdown: markdownContent
+  };
+
+  if (trackedId) {
+    pushPayload.id = trackedId;
   }
 
   const response = await fetch(`${serverUrl}/api/push`, {
@@ -441,10 +505,7 @@ async function runPush(options: PushOptions): Promise<void> {
       'content-type': 'application/json',
       authorization: `Bearer ${token}`
     },
-    body: JSON.stringify({
-      fileName: path.basename(markdownPath),
-      markdown: markdownContent
-    })
+    body: JSON.stringify(pushPayload)
   });
 
   const responseText = await response.text();
@@ -463,7 +524,21 @@ async function runPush(options: PushOptions): Promise<void> {
     throw new Error('Push failed: server response missing `url` or `id`.');
   }
 
-  console.log(`Pushed: ${markdownPath}`);
+  const nextConfig: MdvConfig = {
+    ...config,
+    pushMap: {
+      ...(config.pushMap ?? {}),
+      [trackingKey]: parsed.id
+    }
+  };
+
+  await writeConfig(nextConfig);
+
+  const wasUpdated =
+    parsed.created === false ||
+    (parsed.created === undefined && typeof trackedId === 'string' && trackedId === parsed.id);
+
+  console.log(`${wasUpdated ? 'Updated' : 'Created'}: ${markdownPath}`);
   console.log(`ID: ${parsed.id}`);
   console.log(`Public URL: ${parsed.url}`);
 }

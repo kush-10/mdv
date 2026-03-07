@@ -81,6 +81,11 @@ Example result:
 https://docs.example.com/d/<id>
 ```
 
+Push behavior:
+
+- Pushing the same local file path to the same remote updates the existing published page instead of creating a new one.
+- If that page was deleted from admin, the next push creates a new page and remaps automatically.
+
 ## Viewer Shortcuts
 
 - `Cmd+K` (macOS) or `Ctrl+K` (Windows/Linux): open share overlay with QR code and copyable link.
