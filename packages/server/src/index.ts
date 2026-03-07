@@ -15,6 +15,9 @@ const DEFAULT_PORT_RANGE = portNumbers(4173, 4300);
 const TOKEN_FILE_NAME = 'server-token';
 const ADMIN_USERNAME_ENV = 'MDV_ADMIN_USERNAME';
 const ADMIN_PASSWORD_ENV = 'MDV_ADMIN_PASSWORD';
+const APP_ICON_16_URL = '/favicon-16.png';
+const APP_ICON_32_URL = '/favicon-32.png';
+const APP_ICON_TOUCH_URL = '/apple-touch-icon.png';
 
 type AdminCredentials = {
   username: string;
@@ -718,6 +721,10 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/png" sizes="16x16" href="${escapeHtml(APP_ICON_16_URL)}" />
+    <link rel="icon" type="image/png" sizes="32x32" href="${escapeHtml(APP_ICON_32_URL)}" />
+    <link rel="shortcut icon" type="image/png" href="${escapeHtml(APP_ICON_32_URL)}" />
+    <link rel="apple-touch-icon" href="${escapeHtml(APP_ICON_TOUCH_URL)}" />
     <title>mdv admin</title>
     <style>
       :root { color-scheme: light dark; }
@@ -778,6 +785,10 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/png" sizes="16x16" href="${escapeHtml(APP_ICON_16_URL)}" />
+    <link rel="icon" type="image/png" sizes="32x32" href="${escapeHtml(APP_ICON_32_URL)}" />
+    <link rel="shortcut icon" type="image/png" href="${escapeHtml(APP_ICON_32_URL)}" />
+    <link rel="apple-touch-icon" href="${escapeHtml(APP_ICON_TOUCH_URL)}" />
     <title>mdv</title>
     <style>
       body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; background: #f7f7f5; color: #161616; }

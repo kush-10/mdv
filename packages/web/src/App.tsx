@@ -1,7 +1,16 @@
-import { createElement, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import ReactMarkdown from 'react-markdown';
+import rehypeHighlight from 'rehype-highlight';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import rehypeSlug from 'rehype-slug';
+import remarkCustomHeaderId from 'remark-custom-header-id';
+import { defListHastHandlers, remarkDefinitionList } from 'remark-definition-list';
+import remarkGemoji from 'remark-gemoji';
 import remarkGfm from 'remark-gfm';
+import { remarkMark } from 'remark-mark-highlight';
+import remarkSupersub from 'remark-supersub';
 import { ThemeAnimationType, useModeAnimation } from 'react-theme-switch-animation';
 
 type HeadingItem = {
@@ -12,63 +21,99 @@ type HeadingItem = {
 
 const POLL_INTERVAL_MS = 800;
 
-function createSlugger() {
-  const seen = new Map<string, number>();
+const sanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [
+    ...(defaultSchema.tagNames ?? []),
+    'dl',
+    'dt',
+    'dd',
+    'mark',
+    'sub',
+    'sup',
+    'section'
+  ],
+  attributes: {
+    ...(defaultSchema.attributes ?? {}),
+    '*': [...((defaultSchema.attributes?.['*'] as any[]) ?? []), 'id'],
+    a: [
+      ...((defaultSchema.attributes?.a as any[]) ?? []),
+      'ariaDescribedBy',
+      'ariaLabel',
+      'dataFootnoteRef',
+      'dataFootnoteBackref'
+    ],
+    code: [
+      ...((defaultSchema.attributes?.code as any[]) ?? []),
+      ['className', /^language-./, /^hljs(?:-|$).*/]
+    ],
+    h1: [...((defaultSchema.attributes?.h1 as any[]) ?? []), 'id'],
+    h2: [...((defaultSchema.attributes?.h2 as any[]) ?? []), 'id'],
+    h3: [...((defaultSchema.attributes?.h3 as any[]) ?? []), 'id'],
+    h4: [...((defaultSchema.attributes?.h4 as any[]) ?? []), 'id'],
+    h5: [...((defaultSchema.attributes?.h5 as any[]) ?? []), 'id'],
+    h6: [...((defaultSchema.attributes?.h6 as any[]) ?? []), 'id'],
+    input: [
+      ...((defaultSchema.attributes?.input as any[]) ?? []),
+      ['type', 'checkbox'],
+      'checked',
+      'disabled'
+    ],
+    li: [...((defaultSchema.attributes?.li as any[]) ?? []), ['className', 'task-list-item']],
+    section: [
+      ...((defaultSchema.attributes?.section as any[]) ?? []),
+      'dataFootnotes',
+      ['className', 'footnotes']
+    ],
+    span: [...((defaultSchema.attributes?.span as any[]) ?? []), ['className', /^hljs(?:-|$).*/]],
+    ol: [...((defaultSchema.attributes?.ol as any[]) ?? []), ['className', 'contains-task-list']],
+    ul: [...((defaultSchema.attributes?.ul as any[]) ?? []), ['className', 'contains-task-list']]
+  }
+};
 
-  return (text: string): string => {
-    const base = text
-      .toLowerCase()
-      .trim()
-      .replace(/[`*_~\[\](){}#+.!?,:;"']/g, '')
-      .replace(/\s+/g, '-');
+const remarkPlugins = [
+  [remarkGfm, { singleTilde: false }],
+  remarkCustomHeaderId,
+  remarkDefinitionList,
+  remarkGemoji,
+  remarkMark,
+  remarkSupersub
+];
 
-    const safeBase = base.length > 0 ? base : 'section';
-    const count = seen.get(safeBase) ?? 0;
-    seen.set(safeBase, count + 1);
-    return count === 0 ? safeBase : `${safeBase}-${count}`;
-  };
-}
+const rehypePlugins = [
+  rehypeRaw,
+  rehypeSlug,
+  rehypeHighlight,
+  [rehypeSanitize, sanitizeSchema]
+];
 
-function extractHeadings(markdown: string): HeadingItem[] {
-  const slug = createSlugger();
-  const headings: HeadingItem[] = [];
-  let activeFence: '`' | '~' | null = null;
+const remarkRehypeOptions = {
+  allowDangerousHtml: true,
+  handlers: defListHastHandlers
+};
 
-  for (const line of markdown.split(/\r?\n/)) {
-    const fenceMatch = line.match(/^\s*([`~]{3,})/);
-    if (fenceMatch) {
-      const fenceChar = fenceMatch[1][0] as '`' | '~';
-      if (activeFence === null) {
-        activeFence = fenceChar;
-      } else if (activeFence === fenceChar) {
-        activeFence = null;
+function getRenderedMarkdownHeadings(): HeadingItem[] {
+  const headingNodes = document.querySelectorAll<HTMLElement>(
+    '.markdown-body h1[id], .markdown-body h2[id], .markdown-body h3[id], .markdown-body h4[id], .markdown-body h5[id], .markdown-body h6[id]'
+  );
+
+  return Array.from(headingNodes)
+    .map((node) => {
+      const text = (node.textContent ?? '').trim();
+      const id = node.id.trim();
+      const level = Number.parseInt(node.tagName.slice(1), 10);
+
+      if (!id || !text || !Number.isInteger(level)) {
+        return null;
       }
 
-      continue;
-    }
-
-    if (activeFence !== null) {
-      continue;
-    }
-
-    const match = line.match(/^(#{1,6})\s+(.+)$/);
-    if (!match) {
-      continue;
-    }
-
-    const text = match[2].trim();
-    if (!text) {
-      continue;
-    }
-
-    headings.push({
-      id: slug(text),
-      text,
-      level: match[1].length
-    });
-  }
-
-  return headings;
+      return {
+        id,
+        text,
+        level
+      } satisfies HeadingItem;
+    })
+    .filter((item): item is HeadingItem => item !== null);
 }
 
 function getFileNameFromPath(inputPath: string): string {
@@ -139,6 +184,7 @@ export function App(): JSX.Element {
   const [markdown, setMarkdown] = useState('');
   const [error, setError] = useState('');
   const [filePath, setFilePath] = useState('');
+  const [headings, setHeadings] = useState<HeadingItem[]>([]);
   const [activeHeadingId, setActiveHeadingId] = useState('');
   const [hoveredHeadingId, setHoveredHeadingId] = useState('');
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
@@ -149,7 +195,6 @@ export function App(): JSX.Element {
   const markdownRef = useRef('');
   const shareUrlInputRef = useRef<HTMLInputElement | null>(null);
 
-  const headings = useMemo(() => extractHeadings(markdown), [markdown]);
   const shareShortcutLabel = useMemo(() => {
     return /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'Cmd+K' : 'Ctrl+K';
   }, []);
@@ -325,6 +370,21 @@ export function App(): JSX.Element {
   }, [copyStatus]);
 
   useEffect(() => {
+    if (error) {
+      setHeadings([]);
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      setHeadings(getRenderedMarkdownHeadings());
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [markdown, error]);
+
+  useEffect(() => {
     if (headings.length === 0) {
       setActiveHeadingId('');
       return;
@@ -358,16 +418,6 @@ export function App(): JSX.Element {
       window.removeEventListener('resize', updateActiveHeading);
     };
   }, [headings]);
-
-  const headingIdQueue = headings.map((item) => item.id);
-  let headingIndex = 0;
-
-  const headingRenderer = (tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
-    function Heading(props: any) {
-      const id = headingIdQueue[headingIndex] ?? `section-${headingIndex}`;
-      headingIndex += 1;
-      return createElement(tag, { id, ...props });
-    };
 
   const closeShareDialog = () => {
     setIsShareDialogOpen(false);
@@ -494,15 +544,9 @@ export function App(): JSX.Element {
             <p>{error}</p>
           ) : (
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                h1: headingRenderer('h1') as any,
-                h2: headingRenderer('h2') as any,
-                h3: headingRenderer('h3') as any,
-                h4: headingRenderer('h4') as any,
-                h5: headingRenderer('h5') as any,
-                h6: headingRenderer('h6') as any
-              }}
+              remarkPlugins={remarkPlugins as any}
+              rehypePlugins={rehypePlugins as any}
+              remarkRehypeOptions={remarkRehypeOptions as any}
             >
               {markdown}
             </ReactMarkdown>

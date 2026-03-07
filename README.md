@@ -90,6 +90,19 @@ Push behavior:
 
 - `Cmd+K` (macOS) or `Ctrl+K` (Windows/Linux): open share overlay with QR code and copyable link.
 
+## Markdown Support
+
+The viewer supports basic and extended syntax from Markdown Guide, including:
+
+- Basic: headings (ATX + setext), paragraphs, hard line breaks, emphasis, blockquotes, ordered/unordered lists, code (inline + indented), horizontal rules, links, images, escaping, and inline HTML (sanitized).
+- Extended: tables, fenced code blocks, syntax highlighting, footnotes, heading IDs (`{#custom-id}`), definition lists, strikethrough, task lists, emoji shortcodes (`:joy:`), highlight (`==text==`), subscript (`H~2~O`), superscript (`X^2^`), and automatic URL linking.
+
+Try the bundled feature sample:
+
+```bash
+mdv markdown-features.md
+```
+
 ## Token Management
 
 ```bash
@@ -165,3 +178,8 @@ mdv-server [--port <number>] [--data-dir <path>]
 mdv-server token show [--data-dir <path>]
 mdv-server token rotate [--data-dir <path>]
 ```
+
+## Icon Attribution
+
+- Favicon icon: "Files" by Dighital from Flaticon: https://www.flaticon.com/free-icon/files_3301750
+- Flaticon marks this asset as free with attribution.

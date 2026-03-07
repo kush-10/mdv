@@ -6,6 +6,13 @@
   --code-bg: #ecece8;
   --inline-code-bg: #ecece8;
   --inline-code-text: #101010;
+  --mark-bg: #fff0a8;
+  --mark-border: #d9c362;
+  --hljs-keyword: #0354a6;
+  --hljs-string: #176d1f;
+  --hljs-number: #8d3f00;
+  --hljs-comment: #6f6f69;
+  --hljs-title: #5f1d99;
   --overlay-backdrop: rgba(242, 242, 235, 0.58);
   --overlay-surface: rgba(255, 255, 255, 0.9);
   --overlay-shadow: 0 24px 56px rgba(0, 0, 0, 0.22);
@@ -20,6 +27,13 @@
   --code-bg: #141414;
   --inline-code-bg: #171717;
   --inline-code-text: #ececec;
+  --mark-bg: #5b4f1a;
+  --mark-border: #867129;
+  --hljs-keyword: #86c5ff;
+  --hljs-string: #9bdf86;
+  --hljs-number: #ffbe77;
+  --hljs-comment: #9a9a9a;
+  --hljs-title: #c79dff;
   --overlay-backdrop: rgba(0, 0, 0, 0.6);
   --overlay-surface: rgba(20, 20, 20, 0.88);
   --overlay-shadow: 0 30px 70px rgba(0, 0, 0, 0.6);
@@ -425,6 +439,27 @@ body {
   padding-left: 1.5rem;
 }
 
+.markdown-body ul.contains-task-list,
+.markdown-body ol.contains-task-list {
+  list-style: none;
+  padding-left: 0.25rem;
+}
+
+.markdown-body li.task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.52rem;
+}
+
+.markdown-body li.task-list-item > input[type='checkbox'] {
+  margin-top: 0.38rem;
+  accent-color: var(--text);
+}
+
+.markdown-body li.task-list-item > p {
+  margin: 0;
+}
+
 .markdown-body li + li {
   margin-top: 0.25rem;
 }
@@ -461,6 +496,115 @@ body {
   background: transparent;
   border: 0;
   padding: 0;
+}
+
+.markdown-body pre code.hljs {
+  display: block;
+  color: var(--text);
+}
+
+.markdown-body .hljs {
+  color: var(--text);
+  background: transparent;
+}
+
+.markdown-body .hljs-keyword,
+.markdown-body .hljs-selector-tag,
+.markdown-body .hljs-literal,
+.markdown-body .hljs-name {
+  color: var(--hljs-keyword);
+}
+
+.markdown-body .hljs-string,
+.markdown-body .hljs-attr,
+.markdown-body .hljs-regexp {
+  color: var(--hljs-string);
+}
+
+.markdown-body .hljs-number,
+.markdown-body .hljs-symbol,
+.markdown-body .hljs-variable,
+.markdown-body .hljs-template-variable {
+  color: var(--hljs-number);
+}
+
+.markdown-body .hljs-comment,
+.markdown-body .hljs-quote,
+.markdown-body .hljs-meta {
+  color: var(--hljs-comment);
+}
+
+.markdown-body .hljs-title,
+.markdown-body .hljs-function,
+.markdown-body .hljs-built_in {
+  color: var(--hljs-title);
+}
+
+.markdown-body mark {
+  background: var(--mark-bg);
+  border: 1px solid var(--mark-border);
+  border-radius: 4px;
+  padding: 0.02rem 0.24rem;
+}
+
+.markdown-body sub,
+.markdown-body sup {
+  font-size: 0.72em;
+  line-height: 0;
+}
+
+.markdown-body dl {
+  margin-top: 0;
+  margin-bottom: 1.2rem;
+}
+
+.markdown-body dt {
+  margin-top: 0.6rem;
+  font-weight: 650;
+}
+
+.markdown-body dd {
+  margin: 0.2rem 0 0.9rem 1rem;
+  color: var(--muted);
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.96rem;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.65rem;
+  vertical-align: top;
+}
+
+.markdown-body th {
+  background: color-mix(in srgb, var(--code-bg) 74%, transparent);
+  text-align: left;
+}
+
+.markdown-body [data-footnote-ref] {
+  font-size: 0.78em;
+  vertical-align: super;
+}
+
+.markdown-body .footnotes {
+  margin-top: 2.35rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+
+.markdown-body .footnotes p {
+  margin-bottom: 0.65rem;
+}
+
+.markdown-body [data-footnote-backref] {
+  margin-left: 0.35rem;
+  text-decoration: none;
 }
 
 .markdown-body img {
