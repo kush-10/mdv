@@ -23,6 +23,7 @@ const POLL_INTERVAL_MS = 800;
 
 const sanitizeSchema = {
   ...defaultSchema,
+  clobberPrefix: '',
   tagNames: [
     ...(defaultSchema.tagNames ?? []),
     'dl',
