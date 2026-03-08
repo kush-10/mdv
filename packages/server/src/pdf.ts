@@ -100,13 +100,15 @@ function createPdfHtml(bodyHtml: string, title: string, baseHref: string): strin
     <title>${escapeHtml(title)}</title>
     <style>
       :root {
+        --font-sans: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        --font-mono: "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "Roboto Mono Nerd Font", "RobotoMonoNerdFont", "Roboto Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         color-scheme: light;
       }
       body {
         margin: 0;
         color: #161616;
         background: #ffffff;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-family: var(--font-sans);
         line-height: 1.65;
         font-size: 15px;
       }
@@ -142,7 +144,7 @@ function createPdfHtml(bodyHtml: string, title: string, baseHref: string): strin
         color: #3f3f3f;
       }
       code {
-        font-family: ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+        font-family: var(--font-mono);
         font-size: 0.92em;
         background: #f2f2f2;
         border-radius: 4px;
