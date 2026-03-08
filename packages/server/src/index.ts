@@ -806,7 +806,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     <title>mdv admin</title>
     <style>
       :root { color-scheme: light dark; }
-      body { margin: 0; padding: 40px 20px; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+      body { margin: 0; padding: 40px 20px; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
       main { max-width: 980px; margin: 0 auto; }
       h1 { margin: 0 0 8px; }
       p { margin: 0 0 20px; }
@@ -822,7 +822,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       .actions form { margin: 0; }
       .danger { border: 1px solid rgba(168, 34, 34, 0.7); border-radius: 8px; background: transparent; color: inherit; padding: 6px 10px; cursor: pointer; }
       .danger:hover { background: rgba(168, 34, 34, 0.16); }
-      code { font-size: 0.9em; }
+      code { font-size: 0.9em; font-family: "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "Roboto Mono Nerd Font", "RobotoMonoNerdFont", "Roboto Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
       .empty { color: #666; text-align: center; }
     </style>
   </head>
@@ -869,11 +869,12 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     <link rel="apple-touch-icon" href="${escapeHtml(APP_ICON_TOUCH_URL)}" />
     <title>mdv</title>
     <style>
-      body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; background: #f7f7f5; color: #161616; }
+      body { margin: 0; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #f7f7f5; color: #161616; }
       main { max-width: 680px; margin: 12vh auto; padding: 0 24px; }
       h1 { margin: 0 0 12px; font-size: 2rem; }
       p { margin: 0 0 18px; line-height: 1.7; }
       a { color: inherit; }
+      code { font-family: "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "Roboto Mono Nerd Font", "RobotoMonoNerdFont", "Roboto Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
       .hint { color: #444; font-size: 0.95rem; }
     </style>
   </head>
