@@ -16,3 +16,4 @@ pnpm-debug.log*
 # mdv legacy local config and server data
 .mdv/
 .mdv-server-data/
+data/

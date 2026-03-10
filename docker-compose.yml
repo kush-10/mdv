@@ -8,8 +8,5 @@ services:
     env_file:
       - .env
     volumes:
-      - mdv_data:/data
+      - ./data:/data
     restart: unless-stopped
-
-volumes:
-  mdv_data:

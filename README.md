@@ -11,7 +11,8 @@
 - `mdv`: local viewing + push workflows.
 - `mdv-server`: self-hosted sharing service.
 - Public document routes at `/d/<id>`.
-- Admin page at `/admin` (lists files, supports permanent delete, shows current server token/source).
+- Private/pinned document states (`private` by default, `pinned` appears on `/`).
+- Admin page at `/admin` (lists files, supports pin/private toggle, permanent delete, and server token/source).
 
 ## Install
 
@@ -96,6 +97,13 @@ Push behavior:
 
 - `Cmd+K` (macOS) or `Ctrl+K` (Windows/Linux): open share overlay with QR code and copyable link.
 
+## Viewer Edit Mode (Server Docs)
+
+- Public readers can view `/d/<id>` pages.
+- Edit mode is admin-only and uses autosave.
+- Edit mode shows raw markdown with line numbers and a live preview pane.
+- Document state badge in the top bar shows `pinned` (pin icon) vs `private` (lock icon).
+
 ## Viewer Export
 
 - `PDF` button in the top bar downloads a PDF generated server-side from the raw markdown source.
@@ -144,7 +152,9 @@ MDV_ADMIN_PASSWORD=<strong-password>
 docker compose up -d --build
 ```
 
-Server is available at `http://localhost:4173`. Persistent data is stored in Docker volume `mdv_data` mounted at `/data`.
+Server is available at `http://localhost:4173`. Persistent data is bind-mounted at `./data` -> `/data`.
+
+Important: avoid `docker compose down -v` unless you intentionally want to wipe data. The `-v` flag removes attached volumes/data.
 
 ### 3) Inspect/rotate token inside the container
 
@@ -159,8 +169,13 @@ If you set `MDV_SERVER_TOKEN` in `.env`, token source reports as `env`.
 
 - URL: `http://<host>:4173/admin`
 - Auth: HTTP Basic Auth (`MDV_ADMIN_USERNAME` / `MDV_ADMIN_PASSWORD`)
-- Shows: uploaded files, IDs, timestamps, delete actions, plus current server token and token source
+- Shows: uploaded files, IDs, private/pinned state controls, timestamps, delete actions, plus current server token and token source
 - Delete is permanent (markdown + metadata are removed immediately)
+
+## Homepage
+
+- `/` shows only pinned documents.
+- Private documents are unlisted on `/` but remain accessible directly via `/d/<id>`.
 
 ## Security Notes
 

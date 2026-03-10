@@ -19,7 +19,12 @@ type HeadingItem = {
   level: number;
 };
 
+type DocumentVisibility = 'private' | 'pinned';
+
+type EditStatus = 'idle' | 'checking' | 'saving' | 'saved' | 'error' | 'unauthorized';
+
 const POLL_INTERVAL_MS = 800;
+const EDIT_AUTOSAVE_DEBOUNCE_MS = 900;
 
 const sanitizeSchema = {
   ...defaultSchema,
@@ -182,6 +187,10 @@ function getPdfFileNameFromContentDisposition(contentDisposition: string | null,
   return getFallbackPdfFileName(fallbackPath);
 }
 
+function normalizeDocumentVisibility(value: string | null | undefined): DocumentVisibility {
+  return value === 'pinned' ? 'pinned' : 'private';
+}
+
 function isEditableElement(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -223,17 +232,23 @@ export function App(): JSX.Element {
   const [markdown, setMarkdown] = useState('');
   const [error, setError] = useState('');
   const [filePath, setFilePath] = useState('');
+  const [documentVisibility, setDocumentVisibility] = useState<DocumentVisibility>('private');
   const [headings, setHeadings] = useState<HeadingItem[]>([]);
   const [activeHeadingId, setActiveHeadingId] = useState('');
-  const [hoveredHeadingId, setHoveredHeadingId] = useState('');
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const [shareUrl, setShareUrl] = useState(() => getShareUrlFromLocation());
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [qrCodeError, setQrCodeError] = useState('');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [isPdfDownloading, setIsPdfDownloading] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [draftMarkdown, setDraftMarkdown] = useState('');
+  const [editStatus, setEditStatus] = useState<EditStatus>('idle');
+  const [editError, setEditError] = useState('');
   const markdownRef = useRef('');
+  const lastSavedDraftRef = useRef('');
   const shareUrlInputRef = useRef<HTMLInputElement | null>(null);
+  const editorLineRailRef = useRef<HTMLDivElement | null>(null);
 
   const remoteSlug = useMemo(() => getRemoteSlugFromLocation(), []);
 
@@ -243,6 +258,30 @@ export function App(): JSX.Element {
 
   const pdfDownloadUrl = useMemo(() => getPdfDownloadUrl(remoteSlug), [remoteSlug]);
 
+  const renderedMarkdown = isEditMode ? draftMarkdown : markdown;
+
+  const editorLineNumbers = useMemo(() => {
+    const lineCount = Math.max(1, draftMarkdown.split('\n').length);
+    return Array.from({ length: lineCount }, (_value, index) => index + 1);
+  }, [draftMarkdown]);
+
+  const editStatusLabel = useMemo(() => {
+    switch (editStatus) {
+      case 'checking':
+        return 'Checking admin access...';
+      case 'saving':
+        return 'Autosaving...';
+      case 'saved':
+        return 'Saved';
+      case 'unauthorized':
+        return 'Admin auth required';
+      case 'error':
+        return 'Autosave failed';
+      default:
+        return 'Autosave enabled';
+    }
+  }, [editStatus]);
+
   const { ref, toggleSwitchTheme, isDarkMode } = useModeAnimation({
     animationType: ThemeAnimationType.CIRCLE,
     duration: 700,
@@ -251,6 +290,10 @@ export function App(): JSX.Element {
   });
 
   useEffect(() => {
+    if (isEditMode) {
+      return;
+    }
+
     let isDisposed = false;
     let isLoading = false;
     const markdownUrl = remoteSlug
@@ -278,6 +321,7 @@ export function App(): JSX.Element {
         }
 
         setFilePath(response.headers.get('x-md-path') ?? '');
+        setDocumentVisibility(normalizeDocumentVisibility(response.headers.get('x-md-visibility')));
         const text = await response.text();
 
         if (isDisposed) {
@@ -310,7 +354,7 @@ export function App(): JSX.Element {
       isDisposed = true;
       window.clearInterval(refreshTimer);
     };
-  }, [remoteSlug]);
+  }, [isEditMode, remoteSlug]);
 
   useEffect(() => {
     const fileName = getFileNameFromPath(filePath);
@@ -425,10 +469,10 @@ export function App(): JSX.Element {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [markdown, error]);
+  }, [error, renderedMarkdown]);
 
   useEffect(() => {
-    if (headings.length === 0) {
+    if (isEditMode || headings.length === 0) {
       setActiveHeadingId('');
       return;
     }
@@ -460,7 +504,93 @@ export function App(): JSX.Element {
       window.removeEventListener('scroll', updateActiveHeading);
       window.removeEventListener('resize', updateActiveHeading);
     };
-  }, [headings]);
+  }, [headings, isEditMode]);
+
+  useEffect(() => {
+    if (!isEditMode) {
+      return;
+    }
+
+    setDraftMarkdown(markdownRef.current);
+    lastSavedDraftRef.current = markdownRef.current;
+    setEditError('');
+    setEditStatus('idle');
+  }, [isEditMode]);
+
+  useEffect(() => {
+    if (editStatus !== 'saved') {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setEditStatus('idle');
+    }, 1100);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [editStatus]);
+
+  useEffect(() => {
+    if (!isEditMode || !remoteSlug) {
+      return;
+    }
+
+    if (editStatus === 'checking' || editStatus === 'saving' || editStatus === 'unauthorized') {
+      return;
+    }
+
+    if (draftMarkdown === lastSavedDraftRef.current) {
+      return;
+    }
+
+    const markdownToSave = draftMarkdown;
+    const timer = window.setTimeout(() => {
+      const saveDraft = async () => {
+        setEditStatus('saving');
+        setEditError('');
+
+        try {
+          const response = await fetch(`/api/admin/files/${encodeURIComponent(remoteSlug)}`, {
+            method: 'PUT',
+            headers: {
+              'content-type': 'application/json'
+            },
+            cache: 'no-store',
+            body: JSON.stringify({ markdown: markdownToSave })
+          });
+
+          if (response.status === 401) {
+            setEditStatus('unauthorized');
+            setEditError('Open /admin in this browser tab, sign in, then retry edit mode.');
+            return;
+          }
+
+          if (!response.ok) {
+            setEditStatus('error');
+            setEditError(`Autosave failed (${response.status}).`);
+            return;
+          }
+
+          const payload = (await response.json()) as { visibility?: string };
+          lastSavedDraftRef.current = markdownToSave;
+          markdownRef.current = markdownToSave;
+          setMarkdown(markdownToSave);
+          setDocumentVisibility(normalizeDocumentVisibility(payload.visibility));
+          setEditStatus('saved');
+        } catch {
+          setEditStatus('error');
+          setEditError('Autosave failed. Check server connectivity.');
+        }
+      };
+
+      void saveDraft();
+    }, EDIT_AUTOSAVE_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [draftMarkdown, editStatus, isEditMode, remoteSlug]);
 
   const closeShareDialog = () => {
     setIsShareDialogOpen(false);
@@ -514,13 +644,91 @@ export function App(): JSX.Element {
     }
   };
 
+  const verifyAdminSession = async (): Promise<boolean> => {
+    setEditStatus('checking');
+    setEditError('');
+
+    try {
+      const response = await fetch('/api/admin/session', {
+        cache: 'no-store'
+      });
+
+      if (!response.ok) {
+        setEditStatus('unauthorized');
+        setEditError('Edit mode is admin-only. Open /admin and authenticate first.');
+        return false;
+      }
+
+      setEditStatus('idle');
+      return true;
+    } catch {
+      setEditStatus('error');
+      setEditError('Unable to verify admin session.');
+      return false;
+    }
+  };
+
+  const handleEditToggle = async () => {
+    if (!remoteSlug) {
+      return;
+    }
+
+    if (isEditMode) {
+      setIsEditMode(false);
+      setEditStatus('idle');
+      setEditError('');
+      return;
+    }
+
+    const isAuthorized = await verifyAdminSession();
+    if (!isAuthorized) {
+      return;
+    }
+
+    setIsEditMode(true);
+  };
+
+  const handleRetryAuth = async () => {
+    const isAuthorized = await verifyAdminSession();
+    if (!isAuthorized) {
+      return;
+    }
+
+    setEditError('');
+    setEditStatus('idle');
+  };
+
   return (
     <>
       <header className="top-bar">
-        <div className="file-path" title={filePath || 'Loading markdown path...'}>
-          {filePath || 'Loading markdown path...'}
+        <div className="file-meta">
+          <span
+            className={`doc-visibility-chip is-${documentVisibility}`}
+            aria-label={documentVisibility === 'pinned' ? 'Pinned document' : 'Private document'}
+            title={documentVisibility === 'pinned' ? 'Pinned (shown on home page)' : 'Private (unlisted on home page)'}
+          >
+            <span className="doc-visibility-icon" aria-hidden="true">
+              {documentVisibility === 'pinned' ? '📌' : '🔒'}
+            </span>
+            <span className="doc-visibility-label">{documentVisibility}</span>
+          </span>
+          <div className="file-path" title={filePath || 'Loading markdown path...'}>
+            {filePath || 'Loading markdown path...'}
+          </div>
         </div>
         <div className="top-bar-actions">
+          {remoteSlug ? (
+            <button
+              type="button"
+              className={`edit-toggle${isEditMode ? ' is-active' : ''}`}
+              aria-label={isEditMode ? 'Exit edit mode' : 'Enter edit mode'}
+              onClick={() => {
+                void handleEditToggle();
+              }}
+            >
+              {isEditMode ? 'Done' : 'Edit'}
+            </button>
+          ) : null}
           <button
             type="button"
             className="share-toggle"
@@ -556,20 +764,18 @@ export function App(): JSX.Element {
         </div>
       </header>
 
-      {headings.length > 0 ? (
+      {headings.length > 0 && !isEditMode ? (
         <aside className="toc-rail" aria-label="Table of contents">
+          <p className="toc-title">On this page</p>
           <ul className="toc-list">
             {headings.map((heading) => (
               <li
                 key={heading.id}
                 className={`toc-item toc-l${heading.level}${
                   activeHeadingId === heading.id ? ' is-active' : ''
-                }${hoveredHeadingId === heading.id ? ' is-hovered' : ''}`}
-                onMouseEnter={() => setHoveredHeadingId(heading.id)}
-                onMouseLeave={() => setHoveredHeadingId('')}
+                }`}
               >
                 <a className="toc-link" href={`#${heading.id}`}>
-                  <span className="toc-line" aria-hidden="true" />
                   <span className="toc-label">{heading.text}</span>
                 </a>
               </li>
@@ -631,20 +837,84 @@ export function App(): JSX.Element {
         </div>
       ) : null}
 
-      <main className="reading-view" aria-live="polite">
-        <article className="markdown-body">
-          {error ? (
-            <p>{error}</p>
-          ) : (
-            <ReactMarkdown
-              remarkPlugins={remarkPlugins as any}
-              rehypePlugins={rehypePlugins as any}
-              remarkRehypeOptions={remarkRehypeOptions as any}
-            >
-              {markdown}
-            </ReactMarkdown>
-          )}
-        </article>
+      <main className={`reading-view${isEditMode ? ' is-edit-mode' : ''}`} aria-live="polite">
+        {isEditMode ? (
+          <section className="editor-split">
+            <section className="raw-editor-panel" aria-label="Raw markdown editor">
+              <header className="raw-editor-header">
+                <h2>Raw Markdown</h2>
+                <div className="raw-editor-status">
+                  <span className={`edit-status is-${editStatus}`}>{editStatusLabel}</span>
+                  {editStatus === 'unauthorized' ? (
+                    <button
+                      type="button"
+                      className="edit-auth-retry"
+                      onClick={() => {
+                        void handleRetryAuth();
+                      }}
+                    >
+                      Retry auth
+                    </button>
+                  ) : null}
+                </div>
+              </header>
+
+              {editError ? <p className="raw-editor-error">{editError}</p> : null}
+
+              <div className="raw-editor-shell">
+                <div className="raw-editor-lines" aria-hidden="true" ref={editorLineRailRef}>
+                  {editorLineNumbers.map((lineNumber) => (
+                    <div key={lineNumber}>{lineNumber}</div>
+                  ))}
+                </div>
+                <textarea
+                  className="raw-editor-input"
+                  value={draftMarkdown}
+                  spellCheck={false}
+                  onChange={(event) => {
+                    setDraftMarkdown(event.currentTarget.value);
+                  }}
+                  onScroll={(event) => {
+                    if (!editorLineRailRef.current) {
+                      return;
+                    }
+
+                    editorLineRailRef.current.scrollTop = event.currentTarget.scrollTop;
+                  }}
+                  aria-label="Markdown source editor"
+                />
+              </div>
+            </section>
+
+            <article className="markdown-body preview-pane">
+              {error ? (
+                <p>{error}</p>
+              ) : (
+                <ReactMarkdown
+                  remarkPlugins={remarkPlugins as any}
+                  rehypePlugins={rehypePlugins as any}
+                  remarkRehypeOptions={remarkRehypeOptions as any}
+                >
+                  {renderedMarkdown}
+                </ReactMarkdown>
+              )}
+            </article>
+          </section>
+        ) : (
+          <article className="markdown-body">
+            {error ? (
+              <p>{error}</p>
+            ) : (
+              <ReactMarkdown
+                remarkPlugins={remarkPlugins as any}
+                rehypePlugins={rehypePlugins as any}
+                remarkRehypeOptions={remarkRehypeOptions as any}
+              >
+                {renderedMarkdown}
+              </ReactMarkdown>
+            )}
+          </article>
+        )}
       </main>
     </>
   );

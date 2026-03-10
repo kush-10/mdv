@@ -25,11 +25,14 @@ type AdminCredentials = {
   password: string;
 };
 
+type DocumentVisibility = 'private' | 'pinned';
+
 type DocumentMetadata = {
   id: string;
   fileName: string;
   createdAt: string;
   updatedAt: string;
+  visibility: DocumentVisibility;
 };
 
 type DocumentListItem = {
@@ -37,6 +40,7 @@ type DocumentListItem = {
   fileName: string;
   createdAt: string;
   updatedAt: string;
+  visibility: DocumentVisibility;
   path: string;
 };
 
@@ -63,6 +67,11 @@ type PushResult = {
   id: string;
   fileName: string;
   created: boolean;
+};
+
+type DocumentMetadataRecord = {
+  metadata: DocumentMetadata;
+  shouldRewrite: boolean;
 };
 
 function printUsage(): void {
@@ -230,6 +239,14 @@ function normalizeDisplayFileName(fileName: string | undefined): string {
   return normalized.slice(0, 200);
 }
 
+function isDocumentVisibility(value: string): value is DocumentVisibility {
+  return value === 'private' || value === 'pinned';
+}
+
+function normalizeDocumentVisibility(value: unknown): DocumentVisibility {
+  return value === 'pinned' ? 'pinned' : 'private';
+}
+
 function getDocumentPath(docsDir: string, id: string): string {
   return path.join(docsDir, `${id}.md`);
 }
@@ -387,7 +404,10 @@ async function writeDocumentMetadata(docsDir: string, metadata: DocumentMetadata
   await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8');
 }
 
-async function readDocumentMetadata(docsDir: string, id: string): Promise<DocumentMetadata | null> {
+async function readDocumentMetadataRecord(
+  docsDir: string,
+  id: string
+): Promise<DocumentMetadataRecord | null> {
   const metadataPath = getMetadataPath(docsDir, id);
   if (!(await fileExists(metadataPath))) {
     return null;
@@ -399,16 +419,54 @@ async function readDocumentMetadata(docsDir: string, id: string): Promise<Docume
     const fileName = normalizeDisplayFileName(parsed.fileName);
     const createdAt = typeof parsed.createdAt === 'string' && parsed.createdAt ? parsed.createdAt : '';
     const updatedAt = typeof parsed.updatedAt === 'string' && parsed.updatedAt ? parsed.updatedAt : '';
-
-    return {
+    const visibility = normalizeDocumentVisibility(parsed.visibility);
+    const metadata: DocumentMetadata = {
       id,
       fileName,
       createdAt: createdAt || new Date().toISOString(),
-      updatedAt: updatedAt || createdAt || new Date().toISOString()
+      updatedAt: updatedAt || createdAt || new Date().toISOString(),
+      visibility
+    };
+    const shouldRewrite =
+      parsed.id !== id ||
+      parsed.fileName !== fileName ||
+      parsed.createdAt !== metadata.createdAt ||
+      parsed.updatedAt !== metadata.updatedAt ||
+      !isDocumentVisibility(typeof parsed.visibility === 'string' ? parsed.visibility : '');
+
+    return {
+      metadata,
+      shouldRewrite
     };
   } catch {
     return null;
   }
+}
+
+async function readDocumentMetadata(docsDir: string, id: string): Promise<DocumentMetadata | null> {
+  const record = await readDocumentMetadataRecord(docsDir, id);
+  return record?.metadata ?? null;
+}
+
+async function ensureDocumentMetadata(docsDir: string, id: string): Promise<DocumentMetadata> {
+  const docPath = getDocumentPath(docsDir, id);
+  const stats = await fs.stat(docPath);
+  const fallbackCreatedAt = toIsoStringFromTimeMs(stats.birthtimeMs || stats.ctimeMs);
+  const fallbackUpdatedAt = toIsoStringFromTimeMs(stats.mtimeMs);
+  const existingRecord = await readDocumentMetadataRecord(docsDir, id);
+  const metadata: DocumentMetadata = {
+    id,
+    fileName: existingRecord?.metadata.fileName ?? `${id}.md`,
+    createdAt: existingRecord?.metadata.createdAt ?? fallbackCreatedAt,
+    updatedAt: existingRecord?.metadata.updatedAt ?? fallbackUpdatedAt,
+    visibility: existingRecord?.metadata.visibility ?? 'private'
+  };
+
+  if (!existingRecord || existingRecord.shouldRewrite) {
+    await writeDocumentMetadata(docsDir, metadata);
+  }
+
+  return metadata;
 }
 
 async function listDocuments(docsDir: string): Promise<DocumentListItem[]> {
@@ -418,17 +476,14 @@ async function listDocuments(docsDir: string): Promise<DocumentListItem[]> {
   const documents = await Promise.all(
     markdownEntries.map(async (entry) => {
       const id = entry.name.slice(0, -3);
-      const docPath = getDocumentPath(docsDir, id);
-      const stats = await fs.stat(docPath);
-      const metadata = await readDocumentMetadata(docsDir, id);
-      const fallbackCreatedAt = toIsoStringFromTimeMs(stats.birthtimeMs || stats.ctimeMs);
-      const fallbackUpdatedAt = toIsoStringFromTimeMs(stats.mtimeMs);
+      const metadata = await ensureDocumentMetadata(docsDir, id);
 
       return {
         id,
-        fileName: metadata?.fileName ?? `${id}.md`,
-        createdAt: metadata?.createdAt ?? fallbackCreatedAt,
-        updatedAt: metadata?.updatedAt ?? fallbackUpdatedAt,
+        fileName: metadata.fileName,
+        createdAt: metadata.createdAt,
+        updatedAt: metadata.updatedAt,
+        visibility: metadata.visibility,
         path: `/d/${encodeURIComponent(id)}`
       } satisfies DocumentListItem;
     })
@@ -438,19 +493,21 @@ async function listDocuments(docsDir: string): Promise<DocumentListItem[]> {
   return documents;
 }
 
-async function readMarkdownWithDisplayName(
+async function listPinnedDocuments(docsDir: string): Promise<DocumentListItem[]> {
+  const documents = await listDocuments(docsDir);
+  return documents.filter((document) => document.visibility === 'pinned');
+}
+
+async function readMarkdownWithMetadata(
   docsDir: string,
   id: string
-): Promise<{ markdown: string; displayFileName: string }> {
+): Promise<{ markdown: string; metadata: DocumentMetadata }> {
   const docPath = getDocumentPath(docsDir, id);
-  const [markdown, metadata] = await Promise.all([
-    fs.readFile(docPath, 'utf8'),
-    readDocumentMetadata(docsDir, id)
-  ]);
+  const [markdown, metadata] = await Promise.all([fs.readFile(docPath, 'utf8'), ensureDocumentMetadata(docsDir, id)]);
 
   return {
     markdown,
-    displayFileName: metadata?.fileName ?? `${id}.md`
+    metadata
   };
 }
 
@@ -458,16 +515,16 @@ async function renderDocumentPdf(
   docsDir: string,
   id: string
 ): Promise<{ pdf: Buffer; fileName: string }> {
-  const document = await readMarkdownWithDisplayName(docsDir, id);
+  const document = await readMarkdownWithMetadata(docsDir, id);
   const pdf = await renderMarkdownToPdf({
     markdown: document.markdown,
-    title: document.displayFileName,
+    title: document.metadata.fileName,
     sourceDir: docsDir
   });
 
   return {
     pdf,
-    fileName: toPdfFileName(document.displayFileName)
+    fileName: toPdfFileName(document.metadata.fileName)
   };
 }
 
@@ -499,7 +556,8 @@ async function writePushedDocument(
         id: requestedId,
         fileName: normalizedFileName,
         createdAt,
-        updatedAt: now
+        updatedAt: now,
+        visibility: existingMetadata?.visibility ?? 'private'
       };
 
       await Promise.all([
@@ -521,7 +579,8 @@ async function writePushedDocument(
     id,
     fileName: normalizedFileName,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    visibility: 'private'
   };
 
   await Promise.all([
@@ -548,6 +607,40 @@ async function deleteDocument(docsDir: string, id: string): Promise<boolean> {
   ]);
 
   return true;
+}
+
+async function updateDocumentContent(
+  docsDir: string,
+  id: string,
+  updates: { markdown?: string; visibility?: DocumentVisibility }
+): Promise<DocumentMetadata | null> {
+  const docPath = getDocumentPath(docsDir, id);
+  if (!(await fileExists(docPath))) {
+    return null;
+  }
+
+  const markdownUpdate = typeof updates.markdown === 'string' ? updates.markdown : null;
+  const hasMarkdownUpdate = markdownUpdate !== null;
+  const hasVisibilityUpdate = typeof updates.visibility === 'string';
+  if (!hasMarkdownUpdate && !hasVisibilityUpdate) {
+    return ensureDocumentMetadata(docsDir, id);
+  }
+
+  const metadata = await ensureDocumentMetadata(docsDir, id);
+  const now = new Date().toISOString();
+  const nextMetadata: DocumentMetadata = {
+    ...metadata,
+    updatedAt: now,
+    visibility: updates.visibility ?? metadata.visibility
+  };
+
+  const pendingWrites: Promise<unknown>[] = [writeDocumentMetadata(docsDir, nextMetadata)];
+  if (markdownUpdate !== null) {
+    pendingWrites.push(fs.writeFile(docPath, markdownUpdate, 'utf8'));
+  }
+
+  await Promise.all(pendingWrites);
+  return nextMetadata;
 }
 
 function createAdminAuthMiddleware(admin: AdminCredentials): express.RequestHandler {
@@ -589,6 +682,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   const requireAdminAuth = createAdminAuthMiddleware(config.admin);
   app.set('trust proxy', true);
   app.use(express.json({ limit: '5mb' }));
+  app.use(express.urlencoded({ extended: false }));
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true });
@@ -682,8 +776,9 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
 
     try {
-      const document = await readMarkdownWithDisplayName(docsDir, id);
-      res.setHeader('x-md-path', document.displayFileName);
+      const document = await readMarkdownWithMetadata(docsDir, id);
+      res.setHeader('x-md-path', document.metadata.fileName);
+      res.setHeader('x-md-visibility', document.metadata.visibility);
       res.type('text/plain; charset=utf-8').send(document.markdown);
     } catch {
       res.status(404).json({ error: `Document not found: ${id}` });
@@ -698,8 +793,9 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
 
     try {
-      const document = await readMarkdownWithDisplayName(docsDir, id);
-      res.setHeader('x-md-path', document.displayFileName);
+      const document = await readMarkdownWithMetadata(docsDir, id);
+      res.setHeader('x-md-path', document.metadata.fileName);
+      res.setHeader('x-md-visibility', document.metadata.visibility);
       res.type('text/plain; charset=utf-8').send(document.markdown);
     } catch {
       res.status(404).json({ error: `Document not found: ${id}` });
@@ -715,6 +811,65 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       });
     } catch {
       res.status(500).json({ error: 'Failed to list files.' });
+    }
+  });
+
+  app.get('/api/admin/session', requireAdminAuth, (_req, res) => {
+    res.setHeader('cache-control', 'no-store');
+    res.json({ ok: true });
+  });
+
+  app.put('/api/admin/files/:id', requireAdminAuth, async (req, res) => {
+    const id = normalizeDocumentId(typeof req.params.id === 'string' ? req.params.id : '');
+    if (!id) {
+      res.status(400).json({ error: 'Invalid document id.' });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { markdown?: unknown; visibility?: unknown };
+    const nextMarkdown = typeof body.markdown === 'string' ? body.markdown : undefined;
+    const visibilityValue = typeof body.visibility === 'string' ? body.visibility : undefined;
+    const hasVisibilityField = visibilityValue !== undefined;
+    const nextVisibility = hasVisibilityField
+      ? normalizeDocumentVisibility(visibilityValue)
+      : undefined;
+
+    if (body.markdown !== undefined && typeof body.markdown !== 'string') {
+      res.status(400).json({ error: 'Body `markdown` must be a string.' });
+      return;
+    }
+
+    if (hasVisibilityField && !isDocumentVisibility(visibilityValue)) {
+      res.status(400).json({ error: 'Body `visibility` must be `private` or `pinned`.' });
+      return;
+    }
+
+    if (nextMarkdown === undefined && !hasVisibilityField) {
+      res.status(400).json({ error: 'Provide at least one update (`markdown` or `visibility`).' });
+      return;
+    }
+
+    try {
+      const updatedMetadata = await updateDocumentContent(docsDir, id, {
+        markdown: nextMarkdown,
+        visibility: nextVisibility
+      });
+
+      if (!updatedMetadata) {
+        res.status(404).json({ error: `Document not found: ${id}` });
+        return;
+      }
+
+      res.setHeader('cache-control', 'no-store');
+      res.json({
+        ok: true,
+        id,
+        fileName: updatedMetadata.fileName,
+        updatedAt: updatedMetadata.updatedAt,
+        visibility: updatedMetadata.visibility
+      });
+    } catch {
+      res.status(500).json({ error: 'Failed to update file.' });
     }
   });
 
@@ -758,33 +913,88 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
   });
 
+  app.post('/admin/files/:id/state', requireAdminAuth, async (req, res) => {
+    const id = normalizeDocumentId(typeof req.params.id === 'string' ? req.params.id : '');
+    const requestedVisibilityRaw = typeof req.body.visibility === 'string' ? req.body.visibility : '';
+    if (!id) {
+      res.redirect(303, '/admin?status=invalid-id');
+      return;
+    }
+
+    if (!isDocumentVisibility(requestedVisibilityRaw)) {
+      res.redirect(303, '/admin?status=invalid-visibility');
+      return;
+    }
+
+    const requestedVisibility: DocumentVisibility = requestedVisibilityRaw;
+
+    try {
+      const updatedMetadata = await updateDocumentContent(docsDir, id, {
+        visibility: requestedVisibility
+      });
+      if (!updatedMetadata) {
+        res.redirect(303, '/admin?status=not-found');
+        return;
+      }
+
+      res.redirect(
+        303,
+        `/admin?status=state-updated&id=${encodeURIComponent(id)}&visibility=${encodeURIComponent(updatedMetadata.visibility)}`
+      );
+    } catch {
+      res.redirect(303, '/admin?status=state-error');
+    }
+  });
+
   app.get('/admin', requireAdminAuth, async (req, res) => {
     try {
       const status = typeof req.query.status === 'string' ? req.query.status : '';
       const statusId = typeof req.query.id === 'string' ? normalizeDocumentId(req.query.id) : '';
+      const statusVisibilityRaw = typeof req.query.visibility === 'string' ? req.query.visibility : '';
+      const statusVisibility = isDocumentVisibility(statusVisibilityRaw) ? statusVisibilityRaw : '';
       const documents = await listDocuments(docsDir);
       const statusMessage =
         status === 'deleted' && statusId
           ? `<p class="notice success">Deleted document <code>${escapeHtml(statusId)}</code>.</p>`
           : status === 'not-found'
             ? '<p class="notice error">Document not found. It may have already been deleted.</p>'
-            : status === 'invalid-id'
+          : status === 'invalid-id'
               ? '<p class="notice error">Invalid document id.</p>'
+              : status === 'invalid-visibility'
+                ? '<p class="notice error">Invalid visibility state.</p>'
               : status === 'delete-error'
                 ? '<p class="notice error">Failed to delete document.</p>'
+                : status === 'state-updated' && statusId && statusVisibility
+                  ? `<p class="notice success">Updated <code>${escapeHtml(statusId)}</code> to <strong>${escapeHtml(statusVisibility)}</strong>.</p>`
+                  : status === 'state-error'
+                    ? '<p class="notice error">Failed to update document visibility.</p>'
                 : '';
       const rows =
         documents.length === 0
-          ? '<tr><td colspan="5" class="empty">No files uploaded yet.</td></tr>'
+          ? '<tr><td colspan="6" class="empty">No files uploaded yet.</td></tr>'
           : documents
               .map((document) => {
                 const deletePath = `/admin/files/${encodeURIComponent(document.id)}/delete`;
+                const toggleVisibilityPath = `/admin/files/${encodeURIComponent(document.id)}/state`;
+                const nextVisibility: DocumentVisibility =
+                  document.visibility === 'pinned' ? 'private' : 'pinned';
+                const stateIcon = document.visibility === 'pinned' ? '&#128204;' : '&#128274;';
                 return `<tr>
       <td><a href="${escapeHtml(document.path)}">${escapeHtml(document.fileName)}</a></td>
       <td><code>${escapeHtml(document.id)}</code></td>
+      <td>
+        <span class="state-pill ${escapeHtml(document.visibility)}">
+          <span class="state-icon" aria-hidden="true">${stateIcon}</span>
+          ${escapeHtml(document.visibility)}
+        </span>
+      </td>
       <td>${escapeHtml(new Date(document.createdAt).toLocaleString())}</td>
       <td>${escapeHtml(new Date(document.updatedAt).toLocaleString())}</td>
       <td class="actions">
+        <form method="post" action="${escapeHtml(toggleVisibilityPath)}">
+          <input type="hidden" name="visibility" value="${escapeHtml(nextVisibility)}" />
+          <button type="submit">${document.visibility === 'pinned' ? 'Set private' : 'Pin to home'}</button>
+        </form>
         <form method="post" action="${escapeHtml(deletePath)}" onsubmit="return window.confirm('Delete this page permanently?');">
           <button type="submit" class="danger">Delete</button>
         </form>
@@ -819,11 +1029,18 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       table { width: 100%; border-collapse: collapse; }
       th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
       th:last-child, td:last-child { text-align: right; }
+      .actions { display: flex; justify-content: flex-end; gap: 8px; }
       .actions form { margin: 0; }
+      .actions button { border: 1px solid rgba(127, 127, 127, 0.7); border-radius: 8px; background: transparent; color: inherit; padding: 6px 10px; cursor: pointer; }
+      .actions button:hover { background: rgba(127, 127, 127, 0.16); }
       .danger { border: 1px solid rgba(168, 34, 34, 0.7); border-radius: 8px; background: transparent; color: inherit; padding: 6px 10px; cursor: pointer; }
       .danger:hover { background: rgba(168, 34, 34, 0.16); }
       code { font-size: 0.9em; font-family: "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "Roboto Mono Nerd Font", "RobotoMonoNerdFont", "Roboto Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
       .empty { color: #666; text-align: center; }
+      .state-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(127, 127, 127, 0.45); border-radius: 999px; padding: 3px 10px; font-size: 0.82rem; text-transform: capitalize; }
+      .state-pill.pinned { border-color: rgba(18, 112, 173, 0.65); }
+      .state-pill.private { border-color: rgba(127, 127, 127, 0.45); }
+      .state-icon { line-height: 1; }
     </style>
   </head>
   <body>
@@ -840,6 +1057,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
           <tr>
             <th>File name</th>
             <th>ID</th>
+            <th>State</th>
             <th>Created</th>
             <th>Updated</th>
             <th>Actions</th>
@@ -857,8 +1075,22 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
   });
 
-  app.get('/', (_req, res) => {
-    res.type('text/html; charset=utf-8').send(`<!doctype html>
+  app.get('/', async (_req, res) => {
+    try {
+      const pinnedDocuments = await listPinnedDocuments(docsDir);
+      const pinnedRows =
+        pinnedDocuments.length === 0
+          ? '<li class="empty">No pinned documents yet. Use <code>/admin</code> to pin one.</li>'
+          : pinnedDocuments
+              .map((document) => {
+                return `<li>
+      <a href="${escapeHtml(document.path)}">${escapeHtml(document.fileName)}</a>
+      <span>${escapeHtml(new Date(document.updatedAt).toLocaleString())}</span>
+    </li>`;
+              })
+              .join('\n');
+
+      res.type('text/html; charset=utf-8').send(`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -867,26 +1099,43 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     <link rel="icon" type="image/png" sizes="32x32" href="${escapeHtml(APP_ICON_32_URL)}" />
     <link rel="shortcut icon" type="image/png" href="${escapeHtml(APP_ICON_32_URL)}" />
     <link rel="apple-touch-icon" href="${escapeHtml(APP_ICON_TOUCH_URL)}" />
-    <title>mdv</title>
+    <title>mdv pinned docs</title>
     <style>
       body { margin: 0; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #f7f7f5; color: #161616; }
-      main { max-width: 680px; margin: 12vh auto; padding: 0 24px; }
-      h1 { margin: 0 0 12px; font-size: 2rem; }
-      p { margin: 0 0 18px; line-height: 1.7; }
-      a { color: inherit; }
+      main { max-width: 760px; margin: 10vh auto; padding: 0 24px; }
+      h1 { margin: 0 0 8px; font-size: 2rem; }
+      p { margin: 0 0 18px; line-height: 1.65; color: #3f3f3f; }
+      .badge { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 14px; padding: 5px 11px; border: 1px solid #c3c3bc; border-radius: 999px; font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.08em; }
+      ul { list-style: none; margin: 16px 0 0; padding: 0; border: 1px solid #d7d7d2; border-radius: 12px; background: #ffffff; }
+      li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-bottom: 1px solid #e6e6e2; }
+      li:last-child { border-bottom: 0; }
+      li a { color: inherit; text-decoration: none; }
+      li a:hover { text-decoration: underline; }
+      li span { color: #5f5f5f; font-size: 0.9rem; white-space: nowrap; }
+      .empty { display: block; color: #5f5f5f; }
       code { font-family: "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "Roboto Mono Nerd Font", "RobotoMonoNerdFont", "Roboto Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-      .hint { color: #444; font-size: 0.95rem; }
+      .footer { margin-top: 14px; font-size: 0.9rem; color: #545454; }
+      .footer a { color: inherit; }
+      @media (max-width: 680px) {
+        li { align-items: flex-start; flex-direction: column; }
+      }
     </style>
   </head>
   <body>
     <main>
       <h1>mdv</h1>
-      <p>A local-first markdown viewer with secure push to a self-hosted server for public sharing.</p>
-      <p><a href="https://github.com/kush-10/mdv" target="_blank" rel="noreferrer">View on GitHub</a></p>
-      <p class="hint">Published documents are available at <code>/d/&lt;id&gt;</code>.</p>
+      <div class="badge">&#128204; Pinned documents</div>
+      <p>Only pages marked as pinned appear here. Private pages remain unlisted but still accessible via direct <code>/d/&lt;id&gt;</code> links.</p>
+      <ul>
+        ${pinnedRows}
+      </ul>
+      <p class="footer"><a href="/admin">Admin</a></p>
     </main>
   </body>
 </html>`);
+    } catch {
+      res.status(500).type('text/plain; charset=utf-8').send('Failed to render homepage.');
+    }
   });
 
   app.use(express.static(WEB_DIST_PATH, { index: false }));
