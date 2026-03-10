@@ -19,6 +19,7 @@ const ADMIN_PASSWORD_ENV = 'MDV_ADMIN_PASSWORD';
 const APP_ICON_16_URL = '/favicon-16.png';
 const APP_ICON_32_URL = '/favicon-32.png';
 const APP_ICON_TOUCH_URL = '/apple-touch-icon.png';
+const REPOSITORY_URL = 'https://github.com/kush-10/mdv';
 
 type AdminCredentials = {
   username: string;
@@ -265,6 +266,38 @@ function toIsoStringFromTimeMs(value: number): string {
   return new Date(value).toISOString();
 }
 
+function getOrdinalDayLabel(day: number): string {
+  const mod100 = day % 100;
+  if (mod100 >= 11 && mod100 <= 13) {
+    return `${day}th`;
+  }
+
+  switch (day % 10) {
+    case 1:
+      return `${day}st`;
+    case 2:
+      return `${day}nd`;
+    case 3:
+      return `${day}rd`;
+    default:
+      return `${day}th`;
+  }
+}
+
+function formatUkDateTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  const day = getOrdinalDayLabel(parsed.getDate());
+  const month = parsed.toLocaleString('en-GB', { month: 'short' });
+  const year = String(parsed.getFullYear()).slice(-2);
+  const hours = String(parsed.getHours()).padStart(2, '0');
+  const minutes = String(parsed.getMinutes()).padStart(2, '0');
+  return `${day} ${month} ${year} ${hours}:${minutes}`;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -280,6 +313,10 @@ function renderUiIcon(name: UiIconName): string {
   }
 
   return `<svg viewBox="0 0 20 20" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><use href="/icons/ui.svg#${name}" /></svg>`;
+}
+
+function renderGithubIcon(): string {
+  return '<svg viewBox="0 0 16 16" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path fill="currentColor" stroke="none" d="M8 0a8 8 0 0 0-2.53 15.59c.4.08.55-.17.55-.38l-.01-1.35c-2.02.44-2.54-.5-2.7-.95a2.15 2.15 0 0 0-.9-1.18c-.3-.16-.73-.56 0-.57.68-.01 1.16.62 1.32.87.78 1.32 2.03.95 2.53.72.08-.57.3-.95.55-1.16-1.8-.2-3.68-.9-3.68-4a3.14 3.14 0 0 1 .83-2.18 2.9 2.9 0 0 1 .08-2.15s.67-.21 2.2.83a7.55 7.55 0 0 1 4 0c1.53-1.04 2.2-.83 2.2-.83.3.75.33 1.57.08 2.15a3.12 3.12 0 0 1 .83 2.18c0 3.11-1.9 3.79-3.7 3.99.3.26.56.77.56 1.56l-.01 2.3c0 .21.14.46.55.38A8 8 0 0 0 8 0Z" /></svg>';
 }
 
 function hashSecret(value: string): Buffer {
@@ -1043,8 +1080,8 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       </td>
       <td><a href="${escapeHtml(document.path)}" target="_blank" rel="noopener noreferrer">${escapeHtml(document.fileName)}</a></td>
       <td><code>${escapeHtml(document.id)}</code></td>
-      <td>${escapeHtml(new Date(document.createdAt).toLocaleString())}</td>
-      <td>${escapeHtml(new Date(document.updatedAt).toLocaleString())}</td>
+      <td>${escapeHtml(formatUkDateTime(document.createdAt))}</td>
+      <td>${escapeHtml(formatUkDateTime(document.updatedAt))}</td>
     </tr>`;
               })
               .join('\n');
@@ -1099,6 +1136,10 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       .danger-action:hover { background: rgba(168, 34, 34, 0.16); }
       code { font-size: 0.9em; font-family: "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "Roboto Mono Nerd Font", "RobotoMonoNerdFont", "Roboto Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
       .empty { color: #666; text-align: center; }
+      .repo-footer { margin: 18px 0 0; display: flex; justify-content: flex-end; }
+      .repo-link { width: 2rem; height: 2rem; border-radius: 999px; display: inline-grid; place-items: center; color: inherit; text-decoration: none; }
+      .repo-link:hover { background: rgba(127, 127, 127, 0.16); }
+      .repo-link .ui-icon { width: 1.05rem; height: 1.05rem; }
     </style>
   </head>
   <body>
@@ -1131,6 +1172,16 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
           ${rows}
         </tbody>
       </table>
+      <p class="repo-footer">
+        <a
+          href="${escapeHtml(REPOSITORY_URL)}"
+          class="repo-link"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open project on GitHub"
+          title="GitHub"
+        >${renderGithubIcon()}</a>
+      </p>
     </main>
   </body>
 </html>`);
@@ -1144,12 +1195,12 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       const pinnedDocuments = await listPinnedDocuments(docsDir);
       const pinnedRows =
         pinnedDocuments.length === 0
-          ? '<li class="empty">No pinned documents yet. Use <code>/admin</code> to pin one.</li>'
+          ? '<li class="empty">No pages here yet.</li>'
           : pinnedDocuments
               .map((document) => {
                 return `<li>
       <a href="${escapeHtml(document.path)}">${escapeHtml(document.fileName)}</a>
-      <span>${escapeHtml(new Date(document.updatedAt).toLocaleString())}</span>
+      <span>${escapeHtml(formatUkDateTime(document.updatedAt))}</span>
     </li>`;
               })
               .join('\n');
@@ -1163,14 +1214,12 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     <link rel="icon" type="image/png" sizes="32x32" href="${escapeHtml(APP_ICON_32_URL)}" />
     <link rel="shortcut icon" type="image/png" href="${escapeHtml(APP_ICON_32_URL)}" />
     <link rel="apple-touch-icon" href="${escapeHtml(APP_ICON_TOUCH_URL)}" />
-    <title>mdv pinned docs</title>
+    <title>mdv home</title>
     <style>
       body { margin: 0; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #f7f7f5; color: #161616; }
       main { max-width: 760px; margin: 10vh auto; padding: 0 24px; }
       h1 { margin: 0 0 8px; font-size: 2rem; }
       p { margin: 0 0 18px; line-height: 1.65; color: #3f3f3f; }
-      .badge { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 14px; padding: 5px 11px; border: 1px solid #c3c3bc; border-radius: 999px; font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.08em; }
-      .badge .ui-icon { width: 0.9rem; height: 0.9rem; }
       ul { list-style: none; margin: 16px 0 0; padding: 0; border: 1px solid #d7d7d2; border-radius: 12px; background: #ffffff; }
       li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-bottom: 1px solid #e6e6e2; }
       li:last-child { border-bottom: 0; }
@@ -1178,9 +1227,10 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       li a:hover { text-decoration: underline; }
       li span { color: #5f5f5f; font-size: 0.9rem; white-space: nowrap; }
       .empty { display: block; color: #5f5f5f; }
-      code { font-family: "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "Roboto Mono Nerd Font", "RobotoMonoNerdFont", "Roboto Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-      .footer { margin-top: 14px; font-size: 0.9rem; color: #545454; }
-      .footer a { color: inherit; }
+      .repo-footer { margin: 14px 0 0; display: flex; justify-content: flex-end; }
+      .repo-link { width: 2rem; height: 2rem; border-radius: 999px; display: inline-grid; place-items: center; color: #545454; text-decoration: none; }
+      .repo-link:hover { background: rgba(127, 127, 127, 0.15); color: #161616; }
+      .repo-link .ui-icon { width: 1.05rem; height: 1.05rem; }
       @media (max-width: 680px) {
         li { align-items: flex-start; flex-direction: column; }
       }
@@ -1189,12 +1239,20 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   <body>
     <main>
       <h1>mdv</h1>
-      <div class="badge">${renderUiIcon('pin')} <span>Pinned documents</span></div>
-      <p>Only pages marked as pinned appear here. Private pages remain unlisted but still accessible via direct <code>/d/&lt;id&gt;</code> links.</p>
+      <p>mdv is a clean Markdown app that shows your pinned pages so you can open and read them quickly.</p>
       <ul>
         ${pinnedRows}
       </ul>
-      <p class="footer"><a href="/admin">Admin</a></p>
+      <p class="repo-footer">
+        <a
+          href="${escapeHtml(REPOSITORY_URL)}"
+          class="repo-link"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open project on GitHub"
+          title="GitHub"
+        >${renderGithubIcon()}</a>
+      </p>
     </main>
   </body>
 </html>`);

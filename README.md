@@ -1,20 +1,8 @@
 # mdv
 
-`mdv` is a local-first Markdown viewer with an optional server mode for sharing public links.
+`mdv` is a lightweight Markdown app: open `.md` files, read them in a clean interface, and optionally share pages through your own self-hosted server.
 
-- Read Markdown locally in a clean browser UI.
-- Run `mdv-server` to receive pushes and host public document URLs.
-- Protect admin operations with HTTP Basic Auth.
-
-## What You Get
-
-- `mdv`: local viewing + push workflows.
-- `mdv-server`: self-hosted sharing service.
-- Public document routes at `/d/<id>`.
-- Private/pinned document states (`private` by default, `pinned` appears on `/`).
-- Admin page at `/admin` (lists files, supports pin/private toggle, permanent delete, and server token/source).
-
-## Install
+## Install Once
 
 ```bash
 git clone https://github.com/kush-10/mdv
@@ -22,39 +10,40 @@ cd mdv
 bun run setup
 ```
 
-`setup` installs dependencies, builds all packages, and installs both global commands (`mdv`, `mdv-server`).
-
-Install Chromium once if you want one-click PDF export from the viewer:
+Optional (for one-click PDF export):
 
 ```bash
 bunx playwright install chromium
 ```
 
-If your npm global prefix is not writable (common on Linux), install falls back to `~/.local`:
+## Everyday Use
 
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-## Local Mode (No Server)
-
-Open a Markdown file directly:
+Open any Markdown file:
 
 ```bash
 mdv README.md
 ```
 
-Useful flags:
+Useful options:
 
 ```bash
 mdv README.md --port 4174 --no-open
 ```
 
-## Server Mode (Share Links)
+In the viewer:
 
-Server mode is for publishing Markdown to a self-hosted endpoint and getting shareable URLs.
+- Top-left `home` icon goes back to the app home page.
+- Pin/lock chip shows whether the page is `pinned` (on home) or `private` (unlisted).
+- Share button opens QR + copy-link dialog.
+- PDF button downloads a rendered PDF.
+- Theme button toggles light/dark.
+- Bottom GitHub icon links to this repository.
 
-### 1) Start the server
+## Share Mode (Optional)
+
+If you want public links (`/d/<id>`), run `mdv-server`.
+
+1) Start the server
 
 ```bash
 export MDV_ADMIN_USERNAME=admin
@@ -62,128 +51,61 @@ export MDV_ADMIN_PASSWORD='use-a-strong-password'
 mdv-server --port 4173
 ```
 
-Notes:
-
-- Admin credentials are required to boot.
-- On first run (without `MDV_SERVER_TOKEN` and without an existing token file), a secure token is generated.
-- Data is stored in `.mdv-server-data` by default.
-
-### 2) Pair your client with the server token
+2) Pair your client with the server token
 
 ```bash
 mdv remote pair https://docs.example.com <token>
 ```
 
-This stores remote + token in your local mdv config.
-
-### 3) Push Markdown to get a public URL
+3) Push a file and get a shareable URL
 
 ```bash
 mdv push README.md
 ```
 
-Example result:
+Pushing the same local file updates the same published page unless that page was deleted.
 
-```text
-https://docs.example.com/d/<id>
-```
+## Pages in Server Mode
 
-Push behavior:
+- `/` Home page: pinned links only.
+- `/d/<id>` Markdown reader page.
+- `/admin` Admin page (HTTP Basic Auth required).
 
-- Pushing the same local file path to the same remote updates the existing published page instead of creating a new one.
-- If that page was deleted from admin, the next push creates a new page and remaps automatically.
+Admin lets you create pages, pin/unpin them, and delete permanently.
 
-## Viewer Shortcuts
+## Data Location
 
-- `Cmd+K` (macOS) or `Ctrl+K` (Windows/Linux): open share overlay with QR code and copyable link.
+- Default data dir: `.mdv-server-data`
+- Docs are stored under: `.mdv-server-data/docs`
 
-## Viewer Edit Mode (Server Docs)
+Back up that directory if you need persistence.
 
-- Public readers can view `/d/<id>` pages.
-- Edit mode is admin-only and uses autosave.
-- Edit mode shows raw markdown with line numbers and a live preview pane.
-- Document state badge in the top bar shows `pinned` (pin icon) vs `private` (lock icon).
-
-## Viewer Export
-
-- `PDF` button in the top bar downloads a PDF generated server-side from the raw markdown source.
-
-## Markdown Support
-
-The viewer supports basic and extended syntax from Markdown Guide, including:
-
-- Basic: headings (ATX + setext), paragraphs, hard line breaks, emphasis, blockquotes, ordered/unordered lists, code (inline + indented), horizontal rules, links, images, escaping, and inline HTML (sanitized).
-- Extended: tables, fenced code blocks, syntax highlighting, footnotes, heading IDs (`{#custom-id}`), definition lists, strikethrough, task lists, emoji shortcodes (`:joy:`), highlight (`==text==`), subscript (`H~2~O`), superscript (`X^2^`), and automatic URL linking.
-
-Try the bundled feature sample:
-
-```bash
-mdv markdown-features.md
-```
-
-## Token Management
-
-```bash
-mdv-server token show
-mdv-server token rotate
-```
-
-Rotate if a token leaks. Existing clients must pair again after rotation.
-
-## Docker (Recommended for Hosting)
-
-### 1) Configure environment
+## Docker Quick Start
 
 ```bash
 cp .env.example .env
+docker compose up -d --build
 ```
 
 Set strong values in `.env`:
 
-```dotenv
-MDV_SERVER_TOKEN=<long-random-token>
-MDV_ADMIN_USERNAME=<admin-username>
-MDV_ADMIN_PASSWORD=<strong-password>
-```
+- `MDV_SERVER_TOKEN`
+- `MDV_ADMIN_USERNAME`
+- `MDV_ADMIN_PASSWORD`
 
-### 2) Start with Docker Compose
+Server default URL: `http://localhost:4173`
 
-```bash
-docker compose up -d --build
-```
+## Security Basics
 
-Server is available at `http://localhost:4173`. Persistent data is bind-mounted at `./data` -> `/data`.
-
-Important: avoid `docker compose down -v` unless you intentionally want to wipe data. The `-v` flag removes attached volumes/data.
-
-### 3) Inspect/rotate token inside the container
+- Use HTTPS for internet-facing deployments.
+- Keep token/admin password long and random.
+- Rotate token immediately if leaked:
 
 ```bash
-docker compose exec mdv-server mdv-server token show --data-dir /data
-docker compose exec mdv-server mdv-server token rotate --data-dir /data
+mdv-server token rotate
 ```
 
-If you set `MDV_SERVER_TOKEN` in `.env`, token source reports as `env`.
-
-## Admin Page
-
-- URL: `http://<host>:4173/admin`
-- Auth: HTTP Basic Auth (`MDV_ADMIN_USERNAME` / `MDV_ADMIN_PASSWORD`)
-- Shows: uploaded files, IDs, private/pinned state controls, timestamps, delete actions, plus current server token and token source
-- Delete is permanent (markdown + metadata are removed immediately)
-
-## Homepage
-
-- `/` shows only pinned documents.
-- Private documents are unlisted on `/` but remain accessible directly via `/d/<id>`.
-
-## Security Notes
-
-- Put the server behind HTTPS for any internet-facing deployment.
-- Use long random values for `MDV_SERVER_TOKEN` and admin password.
-- Rotate token immediately if exposed.
-
-## CLI Reference
+## Command Quick Reference
 
 `mdv`:
 

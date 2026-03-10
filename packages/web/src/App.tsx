@@ -26,6 +26,7 @@ type EditStatus = 'idle' | 'checking' | 'saving' | 'saved' | 'error' | 'unauthor
 type AdminSessionState = 'authorized' | 'unauthorized' | 'error';
 
 type AppIconName =
+  | 'home'
   | 'pin'
   | 'lock'
   | 'edit'
@@ -35,7 +36,8 @@ type AppIconName =
   | 'download'
   | 'loader'
   | 'sun'
-  | 'moon';
+  | 'moon'
+  | 'github';
 
 type AppIconProps = {
   name: AppIconName;
@@ -44,6 +46,13 @@ type AppIconProps = {
 
 function getAppIconShape(name: AppIconName): JSX.Element {
   switch (name) {
+    case 'home':
+      return (
+        <>
+          <path d="m3.8 9.1 6.2-5 6.2 5" />
+          <path d="M5.8 8.7v7.3h8.4V8.7" />
+        </>
+      );
     case 'pin':
       return (
         <>
@@ -109,15 +118,28 @@ function getAppIconShape(name: AppIconName): JSX.Element {
       );
     case 'moon':
       return <path d="M13.8 3.8a6.7 6.7 0 1 0 2.4 12.9A7.2 7.2 0 0 1 13.8 3.8Z" />;
+    case 'github':
+      return (
+        <path
+          fill="currentColor"
+          stroke="none"
+          d="M8 0a8 8 0 0 0-2.53 15.59c.4.08.55-.17.55-.38l-.01-1.35c-2.02.44-2.54-.5-2.7-.95a2.15 2.15 0 0 0-.9-1.18c-.3-.16-.73-.56 0-.57.68-.01 1.16.62 1.32.87.78 1.32 2.03.95 2.53.72.08-.57.3-.95.55-1.16-1.8-.2-3.68-.9-3.68-4a3.14 3.14 0 0 1 .83-2.18 2.9 2.9 0 0 1 .08-2.15s.67-.21 2.2.83a7.55 7.55 0 0 1 4 0c1.53-1.04 2.2-.83 2.2-.83.3.75.33 1.57.08 2.15a3.12 3.12 0 0 1 .83 2.18c0 3.11-1.9 3.79-3.7 3.99.3.26.56.77.56 1.56l-.01 2.3c0 .21.14.46.55.38A8 8 0 0 0 8 0Z"
+        />
+      );
   }
+}
+
+function getAppIconViewBox(name: AppIconName): string {
+  return name === 'github' ? '0 0 16 16' : '0 0 20 20';
 }
 
 function AppIcon({ name, className }: AppIconProps): JSX.Element {
   const classes = className ? `app-icon ${className}` : 'app-icon';
+  const viewBox = getAppIconViewBox(name);
 
   return (
     <svg
-      viewBox="0 0 20 20"
+      viewBox={viewBox}
       className={classes}
       fill="none"
       stroke="currentColor"
@@ -146,6 +168,7 @@ async function getAdminSessionState(): Promise<AdminSessionState> {
 
 const POLL_INTERVAL_MS = 800;
 const EDIT_AUTOSAVE_DEBOUNCE_MS = 900;
+const GITHUB_REPOSITORY_URL = 'https://github.com/kush-10/mdv';
 
 const sanitizeSchema = {
   ...defaultSchema,
@@ -932,6 +955,14 @@ export function App(): JSX.Element {
     <>
       <header className="top-bar">
         <div className="file-meta">
+          <a
+            href="/"
+            className="top-action-link home-link"
+            aria-label="Go to home page"
+            title="Home"
+          >
+            <AppIcon name="home" />
+          </a>
           <span
             className={`doc-visibility-chip is-${documentVisibility}`}
             aria-label={documentVisibility === 'pinned' ? 'Pinned document' : 'Private document'}
@@ -1187,6 +1218,19 @@ export function App(): JSX.Element {
           </article>
         )}
       </main>
+
+      <footer className="app-footer" aria-label="Repository link">
+        <a
+          href={GITHUB_REPOSITORY_URL}
+          className="repo-link"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open project on GitHub"
+          title="GitHub"
+        >
+          <AppIcon name="github" />
+        </a>
+      </footer>
     </>
   );
 }

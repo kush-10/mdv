@@ -82,6 +82,20 @@ body {
   cursor: pointer;
 }
 
+.top-action-link {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  border-radius: 9999px;
+  width: 2.5rem;
+  height: 2.5rem;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  line-height: 1;
+  text-decoration: none;
+}
+
 .app-icon {
   width: 1.08rem;
   height: 1.08rem;
@@ -103,6 +117,10 @@ body {
 }
 
 .top-action-button:hover {
+  background: var(--code-bg);
+}
+
+.top-action-link:hover {
   background: var(--code-bg);
 }
 
@@ -152,6 +170,14 @@ body {
 }
 
 .doc-visibility-chip.is-pinned {
+  color: var(--text);
+}
+
+.home-link {
+  color: var(--muted);
+}
+
+.home-link:hover {
   color: var(--text);
 }
 
@@ -416,6 +442,27 @@ body {
 
 .reading-view.is-edit-mode {
   padding: var(--top-bar-height) 0 0;
+}
+
+.app-footer {
+  display: flex;
+  justify-content: center;
+  padding: 0 1rem 1.2rem;
+}
+
+.repo-link {
+  width: 2rem;
+  height: 2rem;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.repo-link:hover {
+  background: var(--code-bg);
+  color: var(--text);
 }
 
 .editor-split {
@@ -836,7 +883,8 @@ body {
     font-size: 1rem;
   }
 
-  .top-action-button {
+  .top-action-button,
+  .top-action-link {
     width: 2.35rem;
     height: 2.35rem;
   }
