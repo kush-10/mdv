@@ -1124,6 +1124,16 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       const statusToastScript = statusToast
         ? `<script>
       (() => {
+        const currentUrl = new URL(window.location.href);
+        if (currentUrl.searchParams.has('status')) {
+          currentUrl.searchParams.delete('status');
+          currentUrl.searchParams.delete('id');
+          currentUrl.searchParams.delete('visibility');
+          const nextSearch = currentUrl.searchParams.toString();
+          const nextUrl = currentUrl.pathname + (nextSearch ? ('?' + nextSearch) : '') + currentUrl.hash;
+          window.history.replaceState({}, '', nextUrl);
+        }
+
         const toast = document.querySelector('.toast');
         if (!toast) {
           return;
