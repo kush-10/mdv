@@ -27,6 +27,7 @@ type PushOptions = {
   markdownPathArg?: string;
   server?: string;
   token?: string;
+  visibility?: DocumentVisibility;
 };
 
 type RemoteSetOptions = {
@@ -54,6 +55,8 @@ type PushResponse = {
 
 type PushMap = Record<string, string>;
 
+type DocumentVisibility = 'private' | 'pinned';
+
 type MdvConfig = {
   remote?: string;
   token?: string;
@@ -63,7 +66,7 @@ type MdvConfig = {
 function printUsage(): void {
   console.error('Usage:');
   console.error('  mdv <path-to-markdown-file> [--port <number>] [--no-open]');
-  console.error('  mdv push <path-to-markdown-file> [--server <url>] [--token <token>]');
+  console.error('  mdv push <path-to-markdown-file> [--server <url>] [--token <token>] [--private | --public]');
   console.error('  mdv remote set <server-url>');
   console.error('  mdv remote pair <server-url> <token>');
   console.error('  mdv remote clear');
@@ -183,6 +186,7 @@ function parsePushOptions(argv: string[]): PushOptions {
   const positional: string[] = [];
   let server: string | undefined;
   let token: string | undefined;
+  let visibility: DocumentVisibility | undefined;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -209,6 +213,24 @@ function parsePushOptions(argv: string[]): PushOptions {
       continue;
     }
 
+    if (arg === '--private') {
+      if (visibility === 'pinned') {
+        throw new Error('Use only one visibility flag: --private or --public.');
+      }
+
+      visibility = 'private';
+      continue;
+    }
+
+    if (arg === '--public') {
+      if (visibility === 'private') {
+        throw new Error('Use only one visibility flag: --private or --public.');
+      }
+
+      visibility = 'pinned';
+      continue;
+    }
+
     if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}`);
     }
@@ -219,7 +241,8 @@ function parsePushOptions(argv: string[]): PushOptions {
   return {
     markdownPathArg: positional[0],
     server,
-    token
+    token,
+    visibility
   };
 }
 
@@ -503,7 +526,7 @@ async function runLocalView(options: LocalViewOptions): Promise<void> {
 async function runPush(options: PushOptions): Promise<void> {
   const rawPath = options.markdownPathArg;
   if (!rawPath) {
-    throw new Error('Usage: mdv push <path-to-markdown-file> [--server <url>] [--token <token>]');
+    throw new Error('Usage: mdv push <path-to-markdown-file> [--server <url>] [--token <token>] [--private | --public]');
   }
 
   const markdownPath = await resolveMarkdownPath(rawPath);
@@ -524,6 +547,7 @@ async function runPush(options: PushOptions): Promise<void> {
     fileName: string;
     markdown: string;
     id?: string;
+    visibility?: DocumentVisibility;
   } = {
     fileName: path.basename(markdownPath),
     markdown: markdownContent
@@ -531,6 +555,10 @@ async function runPush(options: PushOptions): Promise<void> {
 
   if (trackedId) {
     pushPayload.id = trackedId;
+  }
+
+  if (options.visibility) {
+    pushPayload.visibility = options.visibility;
   }
 
   const response = await fetch(`${serverUrl}/api/push`, {
@@ -574,7 +602,10 @@ async function runPush(options: PushOptions): Promise<void> {
 
   console.log(`${wasUpdated ? 'Updated' : 'Created'}: ${markdownPath}`);
   console.log(`ID: ${parsed.id}`);
-  console.log(`Public URL: ${parsed.url}`);
+  if (options.visibility) {
+    console.log(`Visibility: ${options.visibility === 'pinned' ? 'public' : 'private'}`);
+  }
+  console.log(`URL: ${parsed.url}`);
 }
 
 async function runRemoteSet(options: RemoteSetOptions): Promise<void> {

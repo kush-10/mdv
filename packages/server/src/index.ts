@@ -20,6 +20,7 @@ const APP_ICON_16_URL = '/favicon-16.png';
 const APP_ICON_32_URL = '/favicon-32.png';
 const APP_ICON_TOUCH_URL = '/apple-touch-icon.png';
 const REPOSITORY_URL = 'https://github.com/kush-10/mdv';
+const PAGE_NOT_FOUND_MESSAGE = 'Page not found. Check the URL, or sign in via /admin if this is a private page.';
 
 type AdminCredentials = {
   username: string;
@@ -62,6 +63,7 @@ type PushBody = {
   id?: string;
   fileName?: string;
   markdown?: string;
+  visibility?: string;
 };
 
 type PushResult = {
@@ -316,7 +318,7 @@ function renderUiIcon(name: UiIconName): string {
 }
 
 function renderGithubIcon(): string {
-  return '<svg viewBox="0 0 16 16" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path fill="currentColor" stroke="none" d="M8 0a8 8 0 0 0-2.53 15.59c.4.08.55-.17.55-.38l-.01-1.35c-2.02.44-2.54-.5-2.7-.95a2.15 2.15 0 0 0-.9-1.18c-.3-.16-.73-.56 0-.57.68-.01 1.16.62 1.32.87.78 1.32 2.03.95 2.53.72.08-.57.3-.95.55-1.16-1.8-.2-3.68-.9-3.68-4a3.14 3.14 0 0 1 .83-2.18 2.9 2.9 0 0 1 .08-2.15s.67-.21 2.2.83a7.55 7.55 0 0 1 4 0c1.53-1.04 2.2-.83 2.2-.83.3.75.33 1.57.08 2.15a3.12 3.12 0 0 1 .83 2.18c0 3.11-1.9 3.79-3.7 3.99.3.26.56.77.56 1.56l-.01 2.3c0 .21.14.46.55.38A8 8 0 0 0 8 0Z" /></svg>';
+  return '<svg viewBox="-1 -1 18 18" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path fill="currentColor" stroke="none" d="M8 0a8 8 0 0 0-2.53 15.59c.4.08.55-.17.55-.38l-.01-1.35c-2.02.44-2.54-.5-2.7-.95a2.15 2.15 0 0 0-.9-1.18c-.3-.16-.73-.56 0-.57.68-.01 1.16.62 1.32.87.78 1.32 2.03.95 2.53.72.08-.57.3-.95.55-1.16-1.8-.2-3.68-.9-3.68-4a3.14 3.14 0 0 1 .83-2.18 2.9 2.9 0 0 1 .08-2.15s.67-.21 2.2.83a7.55 7.55 0 0 1 4 0c1.53-1.04 2.2-.83 2.2-.83.3.75.33 1.57.08 2.15a3.12 3.12 0 0 1 .83 2.18c0 3.11-1.9 3.79-3.7 3.99.3.26.56.77.56 1.56l-.01 2.3c0 .21.14.46.55.38A8 8 0 0 0 8 0Z" /></svg>';
 }
 
 function hashSecret(value: string): Buffer {
@@ -360,6 +362,10 @@ function isAuthorizedAdminRequest(req: express.Request, admin: AdminCredentials)
     secureCompare(credentials.username, admin.username) &&
     secureCompare(credentials.password, admin.password)
   );
+}
+
+function canAccessDocument(req: express.Request, metadata: DocumentMetadata, admin: AdminCredentials): boolean {
+  return metadata.visibility !== 'private' || isAuthorizedAdminRequest(req, admin);
 }
 
 function resolveAdminCredentials(): AdminCredentials {
@@ -567,28 +573,12 @@ async function readMarkdownWithMetadata(
   };
 }
 
-async function renderDocumentPdf(
-  docsDir: string,
-  id: string
-): Promise<{ pdf: Buffer; fileName: string }> {
-  const document = await readMarkdownWithMetadata(docsDir, id);
-  const pdf = await renderMarkdownToPdf({
-    markdown: document.markdown,
-    title: document.metadata.fileName,
-    sourceDir: docsDir
-  });
-
-  return {
-    pdf,
-    fileName: toPdfFileName(document.metadata.fileName)
-  };
-}
-
 async function writePushedDocument(
   docsDir: string,
   markdown: string,
   fileName: string | undefined,
-  requestedId: string
+  requestedId: string,
+  visibility?: DocumentVisibility
 ): Promise<PushResult> {
   const normalizedFileName = normalizeDisplayFileName(fileName);
   const now = new Date().toISOString();
@@ -613,7 +603,7 @@ async function writePushedDocument(
         fileName: normalizedFileName,
         createdAt,
         updatedAt: now,
-        visibility: existingMetadata?.visibility ?? 'private'
+        visibility: visibility ?? existingMetadata?.visibility ?? 'private'
       };
 
       await Promise.all([
@@ -636,7 +626,7 @@ async function writePushedDocument(
     fileName: normalizedFileName,
     createdAt: now,
     updatedAt: now,
-    visibility: 'private'
+    visibility: visibility ?? 'private'
   };
 
   await Promise.all([
@@ -758,13 +748,24 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
+    const visibilityValue = typeof body.visibility === 'string' ? body.visibility : undefined;
+    if (visibilityValue !== undefined && !isDocumentVisibility(visibilityValue)) {
+      res.status(400).json({ error: 'Body `visibility` must be `private` or `pinned`.' });
+      return;
+    }
+
+    const requestedVisibility = visibilityValue
+      ? normalizeDocumentVisibility(visibilityValue)
+      : undefined;
+
     let pushResult: PushResult;
     try {
       pushResult = await writePushedDocument(
         docsDir,
         body.markdown,
         body.fileName,
-        requestedId
+        requestedId,
+        requestedVisibility
       );
     } catch {
       res.status(500).json({ error: 'Failed to persist markdown document.' });
@@ -780,18 +781,54 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     });
   });
 
-  const sendPdfResponse = async (res: express.Response, id: string): Promise<void> => {
+  const sendNotFoundPageResponse = (res: express.Response) => {
+    res.status(404).json({ error: PAGE_NOT_FOUND_MESSAGE });
+  };
+
+  const readAccessibleDocument = async (
+    req: express.Request,
+    res: express.Response,
+    id: string
+  ): Promise<{ markdown: string; metadata: DocumentMetadata } | null> => {
     try {
-      const output = await renderDocumentPdf(docsDir, id);
-      res.setHeader('cache-control', 'no-store');
-      res.setHeader('content-disposition', toPdfContentDisposition(output.fileName));
-      res.type('application/pdf').send(output.pdf);
+      const document = await readMarkdownWithMetadata(docsDir, id);
+      if (!canAccessDocument(req, document.metadata, config.admin)) {
+        sendNotFoundPageResponse(res);
+        return null;
+      }
+
+      return document;
     } catch (error) {
       if (isNotFoundError(error)) {
-        res.status(404).json({ error: `Document not found: ${id}` });
+        sendNotFoundPageResponse(res);
+        return null;
+      }
+
+      throw error;
+    }
+  };
+
+  const sendPdfResponse = async (
+    req: express.Request,
+    res: express.Response,
+    id: string
+  ): Promise<void> => {
+    try {
+      const document = await readAccessibleDocument(req, res, id);
+      if (!document) {
         return;
       }
 
+      const pdf = await renderMarkdownToPdf({
+        markdown: document.markdown,
+        title: document.metadata.fileName,
+        sourceDir: docsDir
+      });
+
+      res.setHeader('cache-control', 'no-store');
+      res.setHeader('content-disposition', toPdfContentDisposition(toPdfFileName(document.metadata.fileName)));
+      res.type('application/pdf').send(pdf);
+    } catch {
       res.status(500).json({
         error: 'Failed to generate PDF. Ensure Chromium is installed (`bunx playwright install chromium`).'
       });
@@ -805,7 +842,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
-    await sendPdfResponse(res, id);
+    await sendPdfResponse(req, res, id);
   });
 
   app.get('/api/markdown/pdf', async (req, res) => {
@@ -815,7 +852,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
-    await sendPdfResponse(res, id);
+    await sendPdfResponse(req, res, id);
   });
 
   app.get('/api/markdown/:id', async (req, res) => {
@@ -826,12 +863,16 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
 
     try {
-      const document = await readMarkdownWithMetadata(docsDir, id);
+      const document = await readAccessibleDocument(req, res, id);
+      if (!document) {
+        return;
+      }
+
       res.setHeader('x-md-path', document.metadata.fileName);
       res.setHeader('x-md-visibility', document.metadata.visibility);
       res.type('text/plain; charset=utf-8').send(document.markdown);
     } catch {
-      res.status(404).json({ error: `Document not found: ${id}` });
+      res.status(500).json({ error: 'Unable to load this page right now. Please try again.' });
     }
   });
 
@@ -843,12 +884,16 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
 
     try {
-      const document = await readMarkdownWithMetadata(docsDir, id);
+      const document = await readAccessibleDocument(req, res, id);
+      if (!document) {
+        return;
+      }
+
       res.setHeader('x-md-path', document.metadata.fileName);
       res.setHeader('x-md-visibility', document.metadata.visibility);
       res.type('text/plain; charset=utf-8').send(document.markdown);
     } catch {
-      res.status(404).json({ error: `Document not found: ${id}` });
+      res.status(500).json({ error: 'Unable to load this page right now. Please try again.' });
     }
   });
 
@@ -1026,26 +1071,90 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       const statusVisibilityRaw = typeof req.query.visibility === 'string' ? req.query.visibility : '';
       const statusVisibility = isDocumentVisibility(statusVisibilityRaw) ? statusVisibilityRaw : '';
       const documents = await listDocuments(docsDir);
-      const statusMessage =
+      const statusToast =
         status === 'created' && statusId
-          ? `<p class="notice success">Created new page <code>${escapeHtml(statusId)}</code>. <a href="/d/${encodeURIComponent(statusId)}" target="_blank" rel="noopener noreferrer">Open page</a>.</p>`
+          ? {
+              tone: 'success',
+              body: `Created new page <code>${escapeHtml(statusId)}</code>. <a href="/d/${encodeURIComponent(statusId)}" target="_blank" rel="noopener noreferrer">Open page</a>.`
+            }
           : status === 'create-error'
-            ? '<p class="notice error">Failed to create page.</p>'
-          : status === 'deleted' && statusId
-          ? `<p class="notice success">Deleted document <code>${escapeHtml(statusId)}</code>.</p>`
-          : status === 'not-found'
-            ? '<p class="notice error">Document not found. It may have already been deleted.</p>'
-          : status === 'invalid-id'
-              ? '<p class="notice error">Invalid document id.</p>'
-              : status === 'invalid-visibility'
-                ? '<p class="notice error">Invalid visibility state.</p>'
-              : status === 'delete-error'
-                ? '<p class="notice error">Failed to delete document.</p>'
-                : status === 'state-updated' && statusId && statusVisibility
-                  ? `<p class="notice success">Updated <code>${escapeHtml(statusId)}</code> to <strong>${escapeHtml(statusVisibility)}</strong>.</p>`
-                  : status === 'state-error'
-                    ? '<p class="notice error">Failed to update document visibility.</p>'
-                : '';
+            ? {
+                tone: 'error',
+                body: 'Failed to create page.'
+              }
+            : status === 'deleted' && statusId
+              ? {
+                  tone: 'success',
+                  body: `Deleted document <code>${escapeHtml(statusId)}</code>.`
+                }
+              : status === 'not-found'
+                ? {
+                    tone: 'error',
+                    body: 'Document not found. It may have already been deleted.'
+                  }
+                : status === 'invalid-id'
+                  ? {
+                      tone: 'error',
+                      body: 'Invalid document id.'
+                    }
+                  : status === 'invalid-visibility'
+                    ? {
+                        tone: 'error',
+                        body: 'Invalid visibility state.'
+                      }
+                    : status === 'delete-error'
+                      ? {
+                          tone: 'error',
+                          body: 'Failed to delete document.'
+                        }
+                      : status === 'state-updated' && statusId && statusVisibility
+                        ? {
+                            tone: 'success',
+                            body: `Updated <code>${escapeHtml(statusId)}</code> to <strong>${escapeHtml(statusVisibility)}</strong>.`
+                          }
+                        : status === 'state-error'
+                          ? {
+                              tone: 'error',
+                              body: 'Failed to update document visibility.'
+                            }
+                          : null;
+      const statusToastMarkup = statusToast
+        ? `<div class="toast-shell" aria-live="polite"><div class="toast is-${statusToast.tone}" role="${statusToast.tone === 'error' ? 'alert' : 'status'}"><div class="toast-message">${statusToast.body}</div><button type="button" class="toast-close" aria-label="Dismiss notification">x</button></div></div>`
+        : '';
+      const statusToastScript = statusToast
+        ? `<script>
+      (() => {
+        const toast = document.querySelector('.toast');
+        if (!toast) {
+          return;
+        }
+
+        const shell = toast.parentElement;
+        const closeButton = toast.querySelector('.toast-close');
+        let dismissed = false;
+
+        const dismissToast = () => {
+          if (dismissed) {
+            return;
+          }
+
+          dismissed = true;
+          toast.classList.add('is-leaving');
+          window.setTimeout(() => {
+            if (shell) {
+              shell.remove();
+            }
+          }, 220);
+        };
+
+        if (closeButton) {
+          closeButton.addEventListener('click', dismissToast);
+        }
+
+        window.setTimeout(dismissToast, 4200);
+      })();
+    </script>`
+        : '';
       const rows =
         documents.length === 0
           ? '<tr><td colspan="5" class="empty">No files uploaded yet.</td></tr>'
@@ -1099,13 +1208,10 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     <title>mdv admin</title>
     <style>
       :root { color-scheme: light dark; }
-      body { margin: 0; padding: 40px 20px; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
-      main { max-width: 980px; margin: 0 auto; }
+      body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+      main { width: min(980px, 100%); margin: 0 auto; padding: 40px 20px 30px; flex: 1; }
       h1 { margin: 0 0 8px; }
       p { margin: 0 0 20px; }
-      .notice { margin: 0 0 18px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(127, 127, 127, 0.45); }
-      .notice.success { border-color: rgba(15, 140, 74, 0.55); }
-      .notice.error { border-color: rgba(168, 34, 34, 0.6); }
       .token-panel { margin: 0 0 20px; padding: 12px 14px; border: 1px solid rgba(127, 127, 127, 0.35); border-radius: 8px; }
       .token-panel p { margin: 0 0 8px; }
       .token-panel p:last-child { margin-bottom: 0; }
@@ -1117,8 +1223,8 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       .create-form button:hover { background: rgba(127, 127, 127, 0.12); }
       .create-form input:focus-visible, .create-form button:focus-visible { outline: 2px solid rgba(44, 111, 186, 0.72); outline-offset: 2px; }
       table { width: 100%; border-collapse: collapse; }
-      th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
-      .actions-col, .actions-cell { text-align: center; width: 116px; }
+      td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
+      .actions-cell { text-align: center; width: 116px; }
       .actions-cell { white-space: nowrap; }
       .actions-cell form { margin: 0; display: inline-flex; }
       .actions-cell form + form { margin-left: 6px; }
@@ -1136,17 +1242,25 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       .danger-action:hover { background: rgba(168, 34, 34, 0.16); }
       code { font-size: 0.9em; font-family: "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "Roboto Mono Nerd Font", "RobotoMonoNerdFont", "Roboto Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
       .empty { color: #666; text-align: center; }
-      .repo-footer { margin: 18px 0 0; display: flex; justify-content: flex-end; }
-      .repo-link { width: 2rem; height: 2rem; border-radius: 999px; display: inline-grid; place-items: center; color: inherit; text-decoration: none; }
+      .toast-shell { position: fixed; top: 18px; right: 18px; z-index: 30; pointer-events: none; }
+      .toast { max-width: min(420px, calc(100vw - 36px)); display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px 11px 14px; border-radius: 12px; border: 1px solid rgba(127, 127, 127, 0.45); background: color-mix(in srgb, Canvas 94%, transparent); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18); pointer-events: auto; }
+      .toast.is-success { border-color: rgba(15, 140, 74, 0.55); }
+      .toast.is-error { border-color: rgba(168, 34, 34, 0.6); }
+      .toast.is-leaving { opacity: 0; transform: translateY(-6px); transition: opacity 0.2s ease, transform 0.2s ease; }
+      .toast-message { margin: 0; line-height: 1.45; font-size: 0.92rem; }
+      .toast-message a { color: inherit; }
+      .toast-close { width: 1.55rem; height: 1.55rem; border: 0; border-radius: 999px; background: transparent; color: inherit; cursor: pointer; line-height: 1; padding: 0; flex: 0 0 auto; }
+      .toast-close:hover { background: rgba(127, 127, 127, 0.16); }
+      .bottom-bar { border-top: 1px solid rgba(127, 127, 127, 0.35); padding: 0.56rem 1rem; display: flex; justify-content: center; background: color-mix(in srgb, Canvas 96%, transparent); }
+      .repo-link { width: 2.2rem; height: 2.2rem; border-radius: 999px; display: inline-grid; place-items: center; color: inherit; text-decoration: none; }
       .repo-link:hover { background: rgba(127, 127, 127, 0.16); }
-      .repo-link .ui-icon { width: 1.05rem; height: 1.05rem; }
+      .repo-link .ui-icon { width: 1.12rem; height: 1.12rem; display: block; overflow: visible; }
     </style>
   </head>
   <body>
     <main>
       <h1>mdv admin</h1>
       <p>Uploaded files: ${documents.length}</p>
-      ${statusMessage}
       <section class="token-panel" aria-label="Server token">
         <p>Server token: <code>${escapeHtml(config.token)}</code></p>
         <p>Source: <code>${escapeHtml(config.tokenSource)}</code></p>
@@ -1159,30 +1273,23 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
         </form>
       </section>
       <table>
-        <thead>
-          <tr>
-            <th class="actions-col">Pin / Bin</th>
-            <th>File name</th>
-            <th>ID</th>
-            <th>Created</th>
-            <th>Updated</th>
-          </tr>
-        </thead>
         <tbody>
           ${rows}
         </tbody>
       </table>
-      <p class="repo-footer">
-        <a
-          href="${escapeHtml(REPOSITORY_URL)}"
-          class="repo-link"
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="Open project on GitHub"
-          title="GitHub"
-        >${renderGithubIcon()}</a>
-      </p>
     </main>
+    ${statusToastMarkup}
+    ${statusToastScript}
+    <footer class="bottom-bar" aria-label="Repository link">
+      <a
+        href="${escapeHtml(REPOSITORY_URL)}"
+        class="repo-link"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Open project on GitHub"
+        title="GitHub"
+      >${renderGithubIcon()}</a>
+    </footer>
   </body>
 </html>`);
     } catch {
@@ -1216,8 +1323,8 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     <link rel="apple-touch-icon" href="${escapeHtml(APP_ICON_TOUCH_URL)}" />
     <title>mdv home</title>
     <style>
-      body { margin: 0; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #f7f7f5; color: #161616; }
-      main { max-width: 760px; margin: 10vh auto; padding: 0 24px; }
+      body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #f7f7f5; color: #161616; }
+      main { width: min(760px, 100%); margin: 0 auto; padding: 10vh 24px 32px; flex: 1; }
       h1 { margin: 0 0 8px; font-size: 2rem; }
       p { margin: 0 0 18px; line-height: 1.65; color: #3f3f3f; }
       ul { list-style: none; margin: 16px 0 0; padding: 0; border: 1px solid #d7d7d2; border-radius: 12px; background: #ffffff; }
@@ -1227,10 +1334,10 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       li a:hover { text-decoration: underline; }
       li span { color: #5f5f5f; font-size: 0.9rem; white-space: nowrap; }
       .empty { display: block; color: #5f5f5f; }
-      .repo-footer { margin: 14px 0 0; display: flex; justify-content: flex-end; }
-      .repo-link { width: 2rem; height: 2rem; border-radius: 999px; display: inline-grid; place-items: center; color: #545454; text-decoration: none; }
+      .bottom-bar { border-top: 1px solid #d7d7d2; padding: 0.56rem 1rem; display: flex; justify-content: center; background: color-mix(in srgb, #f7f7f5 92%, #ffffff); }
+      .repo-link { width: 2.2rem; height: 2.2rem; border-radius: 999px; display: inline-grid; place-items: center; color: #545454; text-decoration: none; }
       .repo-link:hover { background: rgba(127, 127, 127, 0.15); color: #161616; }
-      .repo-link .ui-icon { width: 1.05rem; height: 1.05rem; }
+      .repo-link .ui-icon { width: 1.12rem; height: 1.12rem; display: block; overflow: visible; }
       @media (max-width: 680px) {
         li { align-items: flex-start; flex-direction: column; }
       }
@@ -1243,17 +1350,17 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       <ul>
         ${pinnedRows}
       </ul>
-      <p class="repo-footer">
-        <a
-          href="${escapeHtml(REPOSITORY_URL)}"
-          class="repo-link"
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label="Open project on GitHub"
-          title="GitHub"
-        >${renderGithubIcon()}</a>
-      </p>
     </main>
+    <footer class="bottom-bar" aria-label="Repository link">
+      <a
+        href="${escapeHtml(REPOSITORY_URL)}"
+        class="repo-link"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Open project on GitHub"
+        title="GitHub"
+      >${renderGithubIcon()}</a>
+    </footer>
   </body>
 </html>`);
     } catch {
@@ -1263,12 +1370,63 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
 
   app.use(express.static(WEB_DIST_PATH, { index: false }));
 
-  app.get('/d/:id', (_req, res) => {
-    res.sendFile(path.join(WEB_DIST_PATH, 'index.html'));
+  const sendDocumentNotFoundPage = (res: express.Response) => {
+    res.status(404).type('text/html; charset=utf-8').send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Page not found</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #f7f7f5; color: #161616; }
+      main { width: min(560px, 100%); border: 1px solid #d8d8d3; border-radius: 14px; padding: 20px 18px; background: #ffffff; }
+      h1 { margin: 0 0 8px; font-size: 1.4rem; }
+      p { margin: 0 0 12px; line-height: 1.55; color: #3f3f3f; }
+      a { color: inherit; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Page not found</h1>
+      <p>${escapeHtml(PAGE_NOT_FOUND_MESSAGE)}</p>
+      <p><a href="/">Go back home</a></p>
+    </main>
+  </body>
+</html>`);
+  };
+
+  const handleDocumentShellRequest = async (req: express.Request, res: express.Response) => {
+    const rawId = typeof req.params.id === 'string' ? req.params.id : '';
+    const id = normalizeDocumentId(rawId);
+    if (!id) {
+      sendDocumentNotFoundPage(res);
+      return;
+    }
+
+    try {
+      const metadata = await ensureDocumentMetadata(docsDir, id);
+      if (!canAccessDocument(req, metadata, config.admin)) {
+        sendDocumentNotFoundPage(res);
+        return;
+      }
+
+      res.sendFile(path.join(WEB_DIST_PATH, 'index.html'));
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        sendDocumentNotFoundPage(res);
+        return;
+      }
+
+      res.status(500).type('text/plain; charset=utf-8').send('Unable to open this page right now. Please try again.');
+    }
+  };
+
+  app.get('/d/:id', (req, res) => {
+    void handleDocumentShellRequest(req, res);
   });
 
-  app.get('/d/:id/*', (_req, res) => {
-    res.sendFile(path.join(WEB_DIST_PATH, 'index.html'));
+  app.get('/d/:id/*', (req, res) => {
+    void handleDocumentShellRequest(req, res);
   });
 
   const selectedPort = config.port ?? (await getPort({ port: DEFAULT_PORT_RANGE }));

@@ -60,10 +60,11 @@ mdv remote pair https://docs.example.com <token>
 3) Push a file and get a shareable URL
 
 ```bash
-mdv push README.md
+mdv push README.md --public
 ```
 
 Pushing the same local file updates the same published page unless that page was deleted.
+Use `--public` to pin on `/`, or `--private` to require admin auth to open `/d/<id>`.
 
 ## Pages in Server Mode
 
@@ -72,6 +73,7 @@ Pushing the same local file updates the same published page unless that page was
 - `/admin` Admin page (HTTP Basic Auth required).
 
 Admin lets you create pages, pin/unpin them, and delete permanently.
+Private page URLs return a not found error unless you are logged in via `/admin`.
 
 ## Data Location
 
@@ -111,7 +113,7 @@ mdv-server token rotate
 
 ```bash
 mdv <path-to-markdown-file> [--port <number>] [--no-open]
-mdv push <path-to-markdown-file> [--server <url>] [--token <token>]
+mdv push <path-to-markdown-file> [--server <url>] [--token <token>] [--private | --public]
 mdv remote set <server-url>
 mdv remote pair <server-url> <token>
 mdv remote clear

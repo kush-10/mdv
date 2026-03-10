@@ -130,7 +130,7 @@ function getAppIconShape(name: AppIconName): JSX.Element {
 }
 
 function getAppIconViewBox(name: AppIconName): string {
-  return name === 'github' ? '0 0 16 16' : '0 0 20 20';
+  return name === 'github' ? '-1 -1 18 18' : '0 0 20 20';
 }
 
 function AppIcon({ name, className }: AppIconProps): JSX.Element {
@@ -372,6 +372,28 @@ async function copyTextToClipboard(value: string): Promise<void> {
   }
 }
 
+async function getErrorMessageFromResponse(response: Response, fallbackMessage: string): Promise<string> {
+  const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+
+  try {
+    if (contentType.includes('application/json')) {
+      const payload = (await response.json()) as { error?: unknown };
+      if (typeof payload.error === 'string' && payload.error.trim()) {
+        return payload.error.trim();
+      }
+    } else {
+      const bodyText = (await response.text()).trim();
+      if (bodyText) {
+        return bodyText;
+      }
+    }
+  } catch {
+    return fallbackMessage;
+  }
+
+  return fallbackMessage;
+}
+
 export function App(): JSX.Element {
   const [markdown, setMarkdown] = useState('');
   const [error, setError] = useState('');
@@ -547,7 +569,12 @@ export function App(): JSX.Element {
         });
 
         if (!response.ok) {
-          throw new Error(`Request failed with status ${response.status}`);
+          const fallbackMessage =
+            response.status === 404
+              ? 'Page not found. Check the URL, or sign in via /admin if this is a private page.'
+              : `Request failed with status ${response.status}`;
+          const responseMessage = await getErrorMessageFromResponse(response, fallbackMessage);
+          throw new Error(responseMessage);
         }
 
         if (isDisposed) {
