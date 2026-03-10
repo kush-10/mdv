@@ -23,6 +23,127 @@ type DocumentVisibility = 'private' | 'pinned';
 
 type EditStatus = 'idle' | 'checking' | 'saving' | 'saved' | 'error' | 'unauthorized';
 
+type AdminSessionState = 'authorized' | 'unauthorized' | 'error';
+
+type AppIconName =
+  | 'pin'
+  | 'lock'
+  | 'edit'
+  | 'check'
+  | 'link'
+  | 'share'
+  | 'download'
+  | 'loader'
+  | 'sun'
+  | 'moon';
+
+type AppIconProps = {
+  name: AppIconName;
+  className?: string;
+};
+
+function getAppIconShape(name: AppIconName): JSX.Element {
+  switch (name) {
+    case 'pin':
+      return (
+        <>
+          <path d="M7 3.9h6l-1 4 2.4 2V11H5.6V9.9L8 7.9l-1-4Z" />
+          <path d="M10 11v5.1" />
+        </>
+      );
+    case 'lock':
+      return (
+        <>
+          <path d="M7.1 9V7a2.9 2.9 0 0 1 5.8 0v2" />
+          <rect x="5.4" y="9" width="9.2" height="7.5" rx="1.4" />
+        </>
+      );
+    case 'edit':
+      return (
+        <>
+          <path d="M3.7 16.3 4.4 13l8.2-8.2a1.5 1.5 0 0 1 2.1 0l.5.5a1.5 1.5 0 0 1 0 2.1L7 15.6l-3.3.7Z" />
+          <path d="m11.8 5.6 2.6 2.6" />
+        </>
+      );
+    case 'check':
+      return <path d="m4.3 10.1 3.7 3.7 7.7-7.7" />;
+    case 'link':
+      return (
+        <>
+          <path d="m7.5 12.5-1.9 1.9a2.8 2.8 0 1 1-4-4l1.9-1.9a2.8 2.8 0 0 1 4 0" />
+          <path d="m12.5 7.5 1.9-1.9a2.8 2.8 0 0 1 4 4l-1.9 1.9a2.8 2.8 0 0 1-4 0" />
+          <path d="M7.7 12.3 12.3 7.7" />
+        </>
+      );
+    case 'share':
+      return (
+        <>
+          <circle cx="15.2" cy="4.7" r="1.9" />
+          <circle cx="4.8" cy="10" r="1.9" />
+          <circle cx="15.2" cy="15.3" r="1.9" />
+          <path d="m6.5 9.1 6.9-3.4" />
+          <path d="m6.5 10.9 6.9 3.4" />
+        </>
+      );
+    case 'download':
+      return (
+        <>
+          <path d="M10 3.7v8.1" />
+          <path d="m6.8 8.9 3.2 3.2 3.2-3.2" />
+          <path d="M4.7 15.8h10.6" />
+        </>
+      );
+    case 'loader':
+      return (
+        <>
+          <circle cx="10" cy="10" r="6.2" strokeOpacity="0.28" />
+          <path d="M10 3.8a6.2 6.2 0 0 1 6.2 6.2" />
+        </>
+      );
+    case 'sun':
+      return (
+        <>
+          <circle cx="10" cy="10" r="3" />
+          <path d="M10 2.5v1.8M10 15.7v1.8M4.7 4.7 6 6M14 14l1.3 1.3M2.5 10h1.8M15.7 10h1.8M4.7 15.3 6 14M14 6l1.3-1.3" />
+        </>
+      );
+    case 'moon':
+      return <path d="M13.8 3.8a6.7 6.7 0 1 0 2.4 12.9A7.2 7.2 0 0 1 13.8 3.8Z" />;
+  }
+}
+
+function AppIcon({ name, className }: AppIconProps): JSX.Element {
+  const classes = className ? `app-icon ${className}` : 'app-icon';
+
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className={classes}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {getAppIconShape(name)}
+    </svg>
+  );
+}
+
+async function getAdminSessionState(): Promise<AdminSessionState> {
+  try {
+    const response = await fetch('/api/admin/session', {
+      cache: 'no-store'
+    });
+
+    return response.ok ? 'authorized' : 'unauthorized';
+  } catch {
+    return 'error';
+  }
+}
+
 const POLL_INTERVAL_MS = 800;
 const EDIT_AUTOSAVE_DEBOUNCE_MS = 900;
 
@@ -242,6 +363,7 @@ export function App(): JSX.Element {
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [isPdfDownloading, setIsPdfDownloading] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [hasAdminSession, setHasAdminSession] = useState(false);
   const [draftMarkdown, setDraftMarkdown] = useState('');
   const [editStatus, setEditStatus] = useState<EditStatus>('idle');
   const [editError, setEditError] = useState('');
@@ -249,6 +371,12 @@ export function App(): JSX.Element {
   const lastSavedDraftRef = useRef('');
   const shareUrlInputRef = useRef<HTMLInputElement | null>(null);
   const editorLineRailRef = useRef<HTMLDivElement | null>(null);
+  const editorTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const previewPaneRef = useRef<HTMLElement | null>(null);
+  const isEditorProgrammaticScrollRef = useRef(false);
+  const isPreviewProgrammaticScrollRef = useRef(false);
+  const editorScrollUnlockFrameRef = useRef<number | null>(null);
+  const previewScrollUnlockFrameRef = useRef<number | null>(null);
 
   const remoteSlug = useMemo(() => getRemoteSlugFromLocation(), []);
 
@@ -261,9 +389,41 @@ export function App(): JSX.Element {
   const renderedMarkdown = isEditMode ? draftMarkdown : markdown;
 
   const editorLineNumbers = useMemo(() => {
-    const lineCount = Math.max(1, draftMarkdown.split('\n').length);
+    const lineCount = Math.max(1, draftMarkdown.split(/\r\n|\r|\n/).length);
     return Array.from({ length: lineCount }, (_value, index) => index + 1);
   }, [draftMarkdown]);
+
+  const syncScrollablePanes = (source: HTMLElement, target: HTMLElement) => {
+    const sourceScrollable = source.scrollHeight - source.clientHeight;
+    const targetScrollable = target.scrollHeight - target.clientHeight;
+    if (targetScrollable <= 0) {
+      return;
+    }
+
+    const ratio =
+      sourceScrollable <= 0 ? 0 : Math.min(1, Math.max(0, source.scrollTop / sourceScrollable));
+    const nextScrollTop = ratio * targetScrollable;
+
+    if (Math.abs(target.scrollTop - nextScrollTop) < 1) {
+      return;
+    }
+
+    target.scrollTop = nextScrollTop;
+  };
+
+  const queueScrollUnlock = (
+    lockRef: { current: boolean },
+    frameRef: { current: number | null }
+  ) => {
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+    }
+
+    frameRef.current = window.requestAnimationFrame(() => {
+      lockRef.current = false;
+      frameRef.current = null;
+    });
+  };
 
   const editStatusLabel = useMemo(() => {
     switch (editStatus) {
@@ -288,6 +448,57 @@ export function App(): JSX.Element {
     easing: 'ease-in-out',
     globalClassName: 'dark'
   });
+
+  useEffect(() => {
+    return () => {
+      if (editorScrollUnlockFrameRef.current !== null) {
+        window.cancelAnimationFrame(editorScrollUnlockFrameRef.current);
+      }
+
+      if (previewScrollUnlockFrameRef.current !== null) {
+        window.cancelAnimationFrame(previewScrollUnlockFrameRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!remoteSlug) {
+      setHasAdminSession(false);
+      return;
+    }
+
+    let isDisposed = false;
+
+    const refreshSession = async () => {
+      const sessionState = await getAdminSessionState();
+      if (isDisposed) {
+        return;
+      }
+
+      setHasAdminSession(sessionState === 'authorized');
+    };
+
+    void refreshSession();
+
+    const handleWindowFocus = () => {
+      void refreshSession();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshSession();
+      }
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      isDisposed = true;
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [remoteSlug]);
 
   useEffect(() => {
     if (isEditMode) {
@@ -518,6 +729,22 @@ export function App(): JSX.Element {
   }, [isEditMode]);
 
   useEffect(() => {
+    if (!isEditMode || !editorTextareaRef.current || !previewPaneRef.current) {
+      return;
+    }
+
+    const editor = editorTextareaRef.current;
+    const previewPane = previewPaneRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      syncScrollablePanes(editor, previewPane);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [draftMarkdown, isEditMode]);
+
+  useEffect(() => {
     if (editStatus !== 'saved') {
       return;
     }
@@ -561,6 +788,7 @@ export function App(): JSX.Element {
           });
 
           if (response.status === 401) {
+            setHasAdminSession(false);
             setEditStatus('unauthorized');
             setEditError('Open /admin in this browser tab, sign in, then retry edit mode.');
             return;
@@ -648,24 +876,26 @@ export function App(): JSX.Element {
     setEditStatus('checking');
     setEditError('');
 
-    try {
-      const response = await fetch('/api/admin/session', {
-        cache: 'no-store'
-      });
-
-      if (!response.ok) {
-        setEditStatus('unauthorized');
-        setEditError('Edit mode is admin-only. Open /admin and authenticate first.');
-        return false;
-      }
-
+    const sessionState = await getAdminSessionState();
+    if (sessionState === 'authorized') {
+      setHasAdminSession(true);
       setEditStatus('idle');
       return true;
-    } catch {
-      setEditStatus('error');
-      setEditError('Unable to verify admin session.');
+    }
+
+    setHasAdminSession(false);
+    if (sessionState === 'unauthorized') {
+      setEditStatus('unauthorized');
+      setEditError('Edit mode is admin-only. Open /admin and authenticate first.');
       return false;
     }
+
+    if (sessionState === 'error') {
+      setEditStatus('error');
+      setEditError('Unable to verify admin session.');
+    }
+
+    return false;
   };
 
   const handleEditToggle = async () => {
@@ -708,57 +938,63 @@ export function App(): JSX.Element {
             title={documentVisibility === 'pinned' ? 'Pinned (shown on home page)' : 'Private (unlisted on home page)'}
           >
             <span className="doc-visibility-icon" aria-hidden="true">
-              {documentVisibility === 'pinned' ? '📌' : '🔒'}
+              <AppIcon name={documentVisibility === 'pinned' ? 'pin' : 'lock'} />
             </span>
-            <span className="doc-visibility-label">{documentVisibility}</span>
           </span>
           <div className="file-path" title={filePath || 'Loading markdown path...'}>
             {filePath || 'Loading markdown path...'}
           </div>
         </div>
         <div className="top-bar-actions">
-          {remoteSlug ? (
+          {remoteSlug && hasAdminSession ? (
             <button
               type="button"
-              className={`edit-toggle${isEditMode ? ' is-active' : ''}`}
+              className={`top-action-button edit-toggle${isEditMode ? ' is-active' : ''}`}
               aria-label={isEditMode ? 'Exit edit mode' : 'Enter edit mode'}
+              title={isEditMode ? 'Exit edit mode' : 'Enter edit mode'}
               onClick={() => {
                 void handleEditToggle();
               }}
             >
-              {isEditMode ? 'Done' : 'Edit'}
+              <AppIcon name={isEditMode ? 'check' : 'edit'} />
             </button>
           ) : null}
           <button
             type="button"
-            className="share-toggle"
+            className="top-action-button share-toggle"
             aria-label={`Share this page (${shareShortcutLabel})`}
             aria-haspopup="dialog"
             aria-expanded={isShareDialogOpen}
+            title={`Share (${shareShortcutLabel})`}
             onClick={() => setIsShareDialogOpen(true)}
           >
-            Share
+            <AppIcon name="share" />
           </button>
           <button
             type="button"
-            className="pdf-download"
+            className="top-action-button pdf-download"
             aria-label={isPdfDownloading ? 'Generating PDF' : 'Download PDF'}
+            title={isPdfDownloading ? 'Generating PDF' : 'Download PDF'}
             onClick={() => {
               void handlePdfDownload();
             }}
             disabled={isPdfDownloading}
           >
-            {isPdfDownloading ? 'PDF...' : 'PDF'}
+            <AppIcon
+              name={isPdfDownloading ? 'loader' : 'download'}
+              className={isPdfDownloading ? 'is-spinning' : undefined}
+            />
           </button>
           <button
             ref={ref}
             type="button"
-            className="theme-toggle"
+            className="top-action-button theme-toggle"
             aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
             onClick={toggleSwitchTheme}
           >
             <span aria-hidden="true" className="theme-icon">
-              {isDarkMode ? '☀' : '☾'}
+              <AppIcon name={isDarkMode ? 'sun' : 'moon'} />
             </span>
           </button>
         </div>
@@ -868,6 +1104,7 @@ export function App(): JSX.Element {
                   ))}
                 </div>
                 <textarea
+                  ref={editorTextareaRef}
                   className="raw-editor-input"
                   value={draftMarkdown}
                   spellCheck={false}
@@ -875,30 +1112,64 @@ export function App(): JSX.Element {
                     setDraftMarkdown(event.currentTarget.value);
                   }}
                   onScroll={(event) => {
-                    if (!editorLineRailRef.current) {
+                    const textarea = event.currentTarget;
+                    if (editorLineRailRef.current) {
+                      editorLineRailRef.current.scrollTop = textarea.scrollTop;
+                    }
+
+                    if (!previewPaneRef.current || isEditorProgrammaticScrollRef.current) {
                       return;
                     }
 
-                    editorLineRailRef.current.scrollTop = event.currentTarget.scrollTop;
+                    isPreviewProgrammaticScrollRef.current = true;
+                    syncScrollablePanes(textarea, previewPaneRef.current);
+                    queueScrollUnlock(
+                      isPreviewProgrammaticScrollRef,
+                      previewScrollUnlockFrameRef
+                    );
                   }}
                   aria-label="Markdown source editor"
                 />
               </div>
             </section>
 
-            <article className="markdown-body preview-pane">
-              {error ? (
-                <p>{error}</p>
-              ) : (
-                <ReactMarkdown
-                  remarkPlugins={remarkPlugins as any}
-                  rehypePlugins={rehypePlugins as any}
-                  remarkRehypeOptions={remarkRehypeOptions as any}
-                >
-                  {renderedMarkdown}
-                </ReactMarkdown>
-              )}
-            </article>
+            <div className="split-divider" aria-hidden="true" />
+
+            <section className="preview-panel" aria-label="Rendered markdown preview">
+              <header className="preview-header">
+                <h2>Preview</h2>
+              </header>
+
+              <article
+                className="markdown-body preview-pane"
+                ref={previewPaneRef}
+                onScroll={(event) => {
+                  if (!editorTextareaRef.current || isPreviewProgrammaticScrollRef.current) {
+                    return;
+                  }
+
+                  isEditorProgrammaticScrollRef.current = true;
+                  syncScrollablePanes(event.currentTarget, editorTextareaRef.current);
+                  if (editorLineRailRef.current) {
+                    editorLineRailRef.current.scrollTop = editorTextareaRef.current.scrollTop;
+                  }
+
+                  queueScrollUnlock(isEditorProgrammaticScrollRef, editorScrollUnlockFrameRef);
+                }}
+              >
+                {error ? (
+                  <p>{error}</p>
+                ) : (
+                  <ReactMarkdown
+                    remarkPlugins={remarkPlugins as any}
+                    rehypePlugins={rehypePlugins as any}
+                    remarkRehypeOptions={remarkRehypeOptions as any}
+                  >
+                    {renderedMarkdown}
+                  </ReactMarkdown>
+                )}
+              </article>
+            </section>
           </section>
         ) : (
           <article className="markdown-body">

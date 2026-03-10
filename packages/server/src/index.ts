@@ -74,6 +74,8 @@ type DocumentMetadataRecord = {
   shouldRewrite: boolean;
 };
 
+type UiIconName = 'pin' | 'lock' | 'share' | 'bin' | 'link' | 'download';
+
 function printUsage(): void {
   console.error('Usage:');
   console.error('  mdv-server [--port <number>] [--data-dir <path>]');
@@ -272,6 +274,14 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function renderUiIcon(name: UiIconName): string {
+  if (name === 'bin') {
+    return '<svg viewBox="0 0 20 20" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4.8 5.5h10.4" /><path d="m7.4 5.5.4-1.5h4.4l.4 1.5" /><rect x="6" y="5.5" width="8" height="10.3" rx="1.2" /><path d="M8.8 8.2v5" /><path d="M11.2 8.2v5" /></svg>';
+  }
+
+  return `<svg viewBox="0 0 20 20" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><use href="/icons/ui.svg#${name}" /></svg>`;
+}
+
 function hashSecret(value: string): Buffer {
   return createHash('sha256').update(value).digest();
 }
@@ -304,6 +314,15 @@ function decodeBasicAuthorization(value: string): { username: string; password: 
   } catch {
     return null;
   }
+}
+
+function isAuthorizedAdminRequest(req: express.Request, admin: AdminCredentials): boolean {
+  const credentials = decodeBasicAuthorization(req.get('authorization') ?? '');
+  return (
+    credentials !== null &&
+    secureCompare(credentials.username, admin.username) &&
+    secureCompare(credentials.password, admin.password)
+  );
 }
 
 function resolveAdminCredentials(): AdminCredentials {
@@ -645,13 +664,7 @@ async function updateDocumentContent(
 
 function createAdminAuthMiddleware(admin: AdminCredentials): express.RequestHandler {
   return (req, res, next) => {
-    const credentials = decodeBasicAuthorization(req.get('authorization') ?? '');
-    const isAuthorized =
-      credentials !== null &&
-      secureCompare(credentials.username, admin.username) &&
-      secureCompare(credentials.password, admin.password);
-
-    if (!isAuthorized) {
+    if (!isAuthorizedAdminRequest(req, admin)) {
       res.setHeader('www-authenticate', 'Basic realm="mdv admin", charset="UTF-8"');
       res.setHeader('cache-control', 'no-store');
       res.status(401).send('Unauthorized');
@@ -814,8 +827,13 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
   });
 
-  app.get('/api/admin/session', requireAdminAuth, (_req, res) => {
+  app.get('/api/admin/session', (req, res) => {
     res.setHeader('cache-control', 'no-store');
+    if (!isAuthorizedAdminRequest(req, config.admin)) {
+      res.status(401).json({ ok: false });
+      return;
+    }
+
     res.json({ ok: true });
   });
 
@@ -946,6 +964,24 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
   });
 
+  app.post('/admin/files/create', requireAdminAuth, async (req, res) => {
+    const requestedFileName =
+      typeof req.body.fileName === 'string' ? req.body.fileName : undefined;
+
+    try {
+      const createdDocument = await writePushedDocument(
+        docsDir,
+        '',
+        requestedFileName,
+        ''
+      );
+
+      res.redirect(303, `/admin?status=created&id=${encodeURIComponent(createdDocument.id)}`);
+    } catch {
+      res.redirect(303, '/admin?status=create-error');
+    }
+  });
+
   app.get('/admin', requireAdminAuth, async (req, res) => {
     try {
       const status = typeof req.query.status === 'string' ? req.query.status : '';
@@ -954,7 +990,11 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       const statusVisibility = isDocumentVisibility(statusVisibilityRaw) ? statusVisibilityRaw : '';
       const documents = await listDocuments(docsDir);
       const statusMessage =
-        status === 'deleted' && statusId
+        status === 'created' && statusId
+          ? `<p class="notice success">Created new page <code>${escapeHtml(statusId)}</code>. <a href="/d/${encodeURIComponent(statusId)}" target="_blank" rel="noopener noreferrer">Open page</a>.</p>`
+          : status === 'create-error'
+            ? '<p class="notice error">Failed to create page.</p>'
+          : status === 'deleted' && statusId
           ? `<p class="notice success">Deleted document <code>${escapeHtml(statusId)}</code>.</p>`
           : status === 'not-found'
             ? '<p class="notice error">Document not found. It may have already been deleted.</p>'
@@ -971,34 +1011,40 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
                 : '';
       const rows =
         documents.length === 0
-          ? '<tr><td colspan="6" class="empty">No files uploaded yet.</td></tr>'
+          ? '<tr><td colspan="5" class="empty">No files uploaded yet.</td></tr>'
           : documents
               .map((document) => {
                 const deletePath = `/admin/files/${encodeURIComponent(document.id)}/delete`;
                 const toggleVisibilityPath = `/admin/files/${encodeURIComponent(document.id)}/state`;
                 const nextVisibility: DocumentVisibility =
                   document.visibility === 'pinned' ? 'private' : 'pinned';
-                const stateIcon = document.visibility === 'pinned' ? '&#128204;' : '&#128274;';
+                const stateIcon =
+                  document.visibility === 'pinned' ? renderUiIcon('pin') : renderUiIcon('lock');
+                const toggleLabel =
+                  document.visibility === 'pinned'
+                    ? 'Pinned. Click to switch to private.'
+                    : 'Private. Click to pin to home.';
                 return `<tr>
-      <td><a href="${escapeHtml(document.path)}">${escapeHtml(document.fileName)}</a></td>
-      <td><code>${escapeHtml(document.id)}</code></td>
-      <td>
-        <span class="state-pill ${escapeHtml(document.visibility)}">
-          <span class="state-icon" aria-hidden="true">${stateIcon}</span>
-          ${escapeHtml(document.visibility)}
-        </span>
-      </td>
-      <td>${escapeHtml(new Date(document.createdAt).toLocaleString())}</td>
-      <td>${escapeHtml(new Date(document.updatedAt).toLocaleString())}</td>
-      <td class="actions">
+      <td class="actions-cell">
         <form method="post" action="${escapeHtml(toggleVisibilityPath)}">
           <input type="hidden" name="visibility" value="${escapeHtml(nextVisibility)}" />
-          <button type="submit">${document.visibility === 'pinned' ? 'Set private' : 'Pin to home'}</button>
+          <button
+            type="submit"
+            class="state-toggle ${escapeHtml(document.visibility)}"
+            title="${escapeHtml(toggleLabel)}"
+            aria-label="${escapeHtml(toggleLabel)}"
+          >
+            <span aria-hidden="true" class="state-icon">${stateIcon}</span>
+          </button>
         </form>
         <form method="post" action="${escapeHtml(deletePath)}" onsubmit="return window.confirm('Delete this page permanently?');">
-          <button type="submit" class="danger">Delete</button>
+          <button type="submit" class="icon-action danger-action" title="Delete page" aria-label="Delete page">${renderUiIcon('bin')}</button>
         </form>
       </td>
+      <td><a href="${escapeHtml(document.path)}" target="_blank" rel="noopener noreferrer">${escapeHtml(document.fileName)}</a></td>
+      <td><code>${escapeHtml(document.id)}</code></td>
+      <td>${escapeHtml(new Date(document.createdAt).toLocaleString())}</td>
+      <td>${escapeHtml(new Date(document.updatedAt).toLocaleString())}</td>
     </tr>`;
               })
               .join('\n');
@@ -1026,21 +1072,33 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       .token-panel { margin: 0 0 20px; padding: 12px 14px; border: 1px solid rgba(127, 127, 127, 0.35); border-radius: 8px; }
       .token-panel p { margin: 0 0 8px; }
       .token-panel p:last-child { margin-bottom: 0; }
+      .create-panel { margin: 0 0 20px; padding: 12px 14px; border: 1px solid rgba(127, 127, 127, 0.35); border-radius: 8px; }
+      .create-form { margin: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+      .create-form label { font-weight: 600; }
+      .create-form input { min-width: 220px; max-width: 360px; flex: 1 1 240px; padding: 8px 10px; border: 1px solid rgba(127, 127, 127, 0.45); border-radius: 8px; background: transparent; color: inherit; }
+      .create-form button { border: 1px solid rgba(127, 127, 127, 0.45); border-radius: 8px; background: transparent; color: inherit; padding: 8px 12px; cursor: pointer; }
+      .create-form button:hover { background: rgba(127, 127, 127, 0.12); }
+      .create-form input:focus-visible, .create-form button:focus-visible { outline: 2px solid rgba(44, 111, 186, 0.72); outline-offset: 2px; }
       table { width: 100%; border-collapse: collapse; }
       th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
-      th:last-child, td:last-child { text-align: right; }
-      .actions { display: flex; justify-content: flex-end; gap: 8px; }
-      .actions form { margin: 0; }
-      .actions button { border: 1px solid rgba(127, 127, 127, 0.7); border-radius: 8px; background: transparent; color: inherit; padding: 6px 10px; cursor: pointer; }
-      .actions button:hover { background: rgba(127, 127, 127, 0.16); }
-      .danger { border: 1px solid rgba(168, 34, 34, 0.7); border-radius: 8px; background: transparent; color: inherit; padding: 6px 10px; cursor: pointer; }
-      .danger:hover { background: rgba(168, 34, 34, 0.16); }
+      .actions-col, .actions-cell { text-align: center; width: 116px; }
+      .actions-cell { white-space: nowrap; }
+      .actions-cell form { margin: 0; display: inline-flex; }
+      .actions-cell form + form { margin-left: 6px; }
+      .icon-action { width: 2rem; height: 2rem; border: 0; border-radius: 999px; display: inline-grid; place-items: center; color: inherit; text-decoration: none; background: transparent; padding: 0; cursor: pointer; }
+      .icon-action:hover { background: rgba(127, 127, 127, 0.16); }
+      .icon-action:focus { outline: none; }
+      .state-toggle { width: 2rem; height: 2rem; border: 0; border-radius: 999px; background: transparent; color: inherit; padding: 0; line-height: 1; font-size: 1rem; display: inline-grid; place-items: center; cursor: pointer; }
+      .state-toggle:hover { background: rgba(127, 127, 127, 0.16); }
+      .state-toggle:focus { outline: none; }
+      .icon-action:focus-visible, .state-toggle:focus-visible { outline: 2px solid rgba(44, 111, 186, 0.72); outline-offset: 2px; }
+      .state-toggle.pinned { color: rgba(18, 112, 173, 0.95); }
+      .state-toggle .state-icon { display: inline-grid; place-items: center; width: 1rem; height: 1rem; }
+      .ui-icon { width: 1rem; height: 1rem; display: block; }
+      .danger-action { color: rgba(168, 34, 34, 0.95); }
+      .danger-action:hover { background: rgba(168, 34, 34, 0.16); }
       code { font-size: 0.9em; font-family: "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "Roboto Mono Nerd Font", "RobotoMonoNerdFont", "Roboto Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
       .empty { color: #666; text-align: center; }
-      .state-pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(127, 127, 127, 0.45); border-radius: 999px; padding: 3px 10px; font-size: 0.82rem; text-transform: capitalize; }
-      .state-pill.pinned { border-color: rgba(18, 112, 173, 0.65); }
-      .state-pill.private { border-color: rgba(127, 127, 127, 0.45); }
-      .state-icon { line-height: 1; }
     </style>
   </head>
   <body>
@@ -1052,15 +1110,21 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
         <p>Server token: <code>${escapeHtml(config.token)}</code></p>
         <p>Source: <code>${escapeHtml(config.tokenSource)}</code></p>
       </section>
+      <section class="create-panel" aria-label="Add new page">
+        <form method="post" action="/admin/files/create" class="create-form">
+          <label for="new-file-name">Add new page</label>
+          <input id="new-file-name" name="fileName" type="text" placeholder="new-page.md" />
+          <button type="submit">Add</button>
+        </form>
+      </section>
       <table>
         <thead>
           <tr>
+            <th class="actions-col">Pin / Bin</th>
             <th>File name</th>
             <th>ID</th>
-            <th>State</th>
             <th>Created</th>
             <th>Updated</th>
-            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -1106,6 +1170,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       h1 { margin: 0 0 8px; font-size: 2rem; }
       p { margin: 0 0 18px; line-height: 1.65; color: #3f3f3f; }
       .badge { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 14px; padding: 5px 11px; border: 1px solid #c3c3bc; border-radius: 999px; font-size: 0.84rem; text-transform: uppercase; letter-spacing: 0.08em; }
+      .badge .ui-icon { width: 0.9rem; height: 0.9rem; }
       ul { list-style: none; margin: 16px 0 0; padding: 0; border: 1px solid #d7d7d2; border-radius: 12px; background: #ffffff; }
       li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-bottom: 1px solid #e6e6e2; }
       li:last-child { border-bottom: 0; }
@@ -1124,7 +1189,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   <body>
     <main>
       <h1>mdv</h1>
-      <div class="badge">&#128204; Pinned documents</div>
+      <div class="badge">${renderUiIcon('pin')} <span>Pinned documents</span></div>
       <p>Only pages marked as pinned appear here. Private pages remain unlisted but still accessible via direct <code>/d/&lt;id&gt;</code> links.</p>
       <ul>
         ${pinnedRows}
