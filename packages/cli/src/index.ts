@@ -639,8 +639,9 @@ async function runLocalView(options: LocalViewOptions): Promise<void> {
   });
 
   app.get('/api/local-assets/:assetPath(*)', async (req, res) => {
-    const rawAssetPath =
-      typeof req.params['assetPath(*)'] === 'string' ? req.params['assetPath(*)'] : '';
+    const params = req.params as Record<string, unknown>;
+    const rawAssetPathValue = params.assetPath ?? params['assetPath(*)'] ?? params['0'];
+    const rawAssetPath = typeof rawAssetPathValue === 'string' ? rawAssetPathValue : '';
     const absoluteAssetPath = resolvePathWithinRoot(markdownDir, rawAssetPath);
     if (!absoluteAssetPath) {
       res.status(404).type('text/plain; charset=utf-8').send('Asset not found.');

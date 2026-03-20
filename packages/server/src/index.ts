@@ -979,8 +979,9 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
-    const rawAssetPath =
-      typeof req.params['assetPath(*)'] === 'string' ? req.params['assetPath(*)'] : '';
+    const params = req.params as Record<string, unknown>;
+    const rawAssetPathValue = params.assetPath ?? params['assetPath(*)'] ?? params['0'];
+    const rawAssetPath = typeof rawAssetPathValue === 'string' ? rawAssetPathValue : '';
     const documentAssetDir = getDocumentAssetDirectory(assetsDir, id);
     const absoluteAssetPath = resolvePathWithinRoot(documentAssetDir, rawAssetPath);
     if (!absoluteAssetPath) {
