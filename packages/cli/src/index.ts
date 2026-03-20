@@ -16,6 +16,19 @@ const DEFAULT_PORT_RANGE = portNumbers(4173, 4300);
 const CONFIG_APP_DIR_NAME = 'mdv';
 const CONFIG_FILE_NAME = 'config.json';
 const DOCUMENT_ID_PATTERN = /^[a-z0-9_-]{1,64}$/;
+const PUSHABLE_IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.svg',
+  '.avif',
+  '.bmp',
+  '.ico',
+  '.tif',
+  '.tiff'
+]);
 
 type LocalViewOptions = {
   markdownPathArg?: string;
@@ -51,6 +64,11 @@ type PushResponse = {
   id: string;
   url: string;
   created?: boolean;
+};
+
+type PushAssetPayload = {
+  path: string;
+  dataBase64: string;
 };
 
 type PushMap = Record<string, string>;
@@ -122,6 +140,152 @@ function normalizePushMap(value: unknown): PushMap {
 
 function createPushTrackingKey(serverUrl: string, markdownPath: string): string {
   return `${serverUrl}::${markdownPath}`;
+}
+
+function decodeUriSafe(value: string): string {
+  try {
+    return decodeURI(value);
+  } catch {
+    return value;
+  }
+}
+
+function stripUrlQueryAndHash(value: string): string {
+  const separatorIndex = value.search(/[?#]/);
+  return separatorIndex === -1 ? value : value.slice(0, separatorIndex);
+}
+
+function extractInlineMarkdownDestination(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (trimmed.startsWith('<')) {
+    const closingIndex = trimmed.indexOf('>');
+    if (closingIndex > 1) {
+      return trimmed.slice(1, closingIndex).trim();
+    }
+  }
+
+  const whitespaceIndex = trimmed.search(/\s/);
+  return whitespaceIndex === -1 ? trimmed : trimmed.slice(0, whitespaceIndex);
+}
+
+function normalizeRelativeAssetPath(value: string): string {
+  const decoded = decodeUriSafe(value.trim());
+  if (!decoded) {
+    return '';
+  }
+
+  if (decoded.startsWith('#') || decoded.startsWith('/') || decoded.startsWith('//')) {
+    return '';
+  }
+
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(decoded)) {
+    return '';
+  }
+
+  const withoutSuffix = stripUrlQueryAndHash(decoded).replace(/\\/g, '/').trim();
+  if (!withoutSuffix) {
+    return '';
+  }
+
+  const normalized = path.posix.normalize(withoutSuffix).replace(/^(\.\/)+/, '');
+  if (
+    !normalized ||
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.startsWith('/')
+  ) {
+    return '';
+  }
+
+  return normalized;
+}
+
+function isPushableImageAsset(assetPath: string): boolean {
+  return PUSHABLE_IMAGE_EXTENSIONS.has(path.extname(assetPath).toLowerCase());
+}
+
+function collectRelativeAssetPaths(markdown: string): string[] {
+  const assetPaths = new Set<string>();
+  const markdownImageRegex = /!\[[^\]]*\]\(([^)]+)\)/g;
+  let markdownMatch: RegExpExecArray | null;
+
+  while ((markdownMatch = markdownImageRegex.exec(markdown)) !== null) {
+    const destination = extractInlineMarkdownDestination(markdownMatch[1] ?? '');
+    const normalizedAssetPath = normalizeRelativeAssetPath(destination);
+    if (normalizedAssetPath && isPushableImageAsset(normalizedAssetPath)) {
+      assetPaths.add(normalizedAssetPath);
+    }
+  }
+
+  const htmlImageRegex = /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'=<>]+))/gi;
+  let htmlMatch: RegExpExecArray | null;
+
+  while ((htmlMatch = htmlImageRegex.exec(markdown)) !== null) {
+    const destination = htmlMatch[1] ?? htmlMatch[2] ?? htmlMatch[3] ?? '';
+    const normalizedAssetPath = normalizeRelativeAssetPath(destination);
+    if (normalizedAssetPath && isPushableImageAsset(normalizedAssetPath)) {
+      assetPaths.add(normalizedAssetPath);
+    }
+  }
+
+  return [...assetPaths];
+}
+
+function resolvePathWithinRoot(rootDir: string, relativePath: string): string | null {
+  const normalizedRelativePath = normalizeRelativeAssetPath(relativePath);
+  if (!normalizedRelativePath) {
+    return null;
+  }
+
+  const absoluteRootDir = path.resolve(rootDir);
+  const candidatePath = path.resolve(absoluteRootDir, normalizedRelativePath);
+  const candidateRelativePath = path.relative(absoluteRootDir, candidatePath);
+  if (!candidateRelativePath || candidateRelativePath.startsWith('..') || path.isAbsolute(candidateRelativePath)) {
+    return null;
+  }
+
+  return candidatePath;
+}
+
+async function collectPushAssets(markdownPath: string, markdownContent: string): Promise<PushAssetPayload[]> {
+  const markdownDir = path.dirname(markdownPath);
+  const relativeAssetPaths = collectRelativeAssetPaths(markdownContent);
+  if (relativeAssetPaths.length === 0) {
+    return [];
+  }
+
+  const assets: PushAssetPayload[] = [];
+  for (const relativeAssetPath of relativeAssetPaths) {
+    const absoluteAssetPath = resolvePathWithinRoot(markdownDir, relativeAssetPath);
+    if (!absoluteAssetPath) {
+      console.warn(`Warning: skipping invalid image reference: ${relativeAssetPath}`);
+      continue;
+    }
+
+    try {
+      const stats = await fs.stat(absoluteAssetPath);
+      if (!stats.isFile()) {
+        console.warn(`Warning: referenced image is not a file: ${relativeAssetPath}`);
+        continue;
+      }
+    } catch {
+      console.warn(`Warning: referenced image not found: ${relativeAssetPath}`);
+      continue;
+    }
+
+    const content = await fs.readFile(absoluteAssetPath);
+    assets.push({
+      path: relativeAssetPath,
+      dataBase64: content.toString('base64')
+    });
+  }
+
+  return assets;
 }
 
 function toPdfFileName(fileName: string): string {
@@ -439,6 +603,7 @@ async function runLocalView(options: LocalViewOptions): Promise<void> {
   const markdownPath = await resolveMarkdownPath(rawPath);
   await validateMarkdownPath(markdownPath);
   await assertBuildExists();
+  const markdownDir = path.dirname(markdownPath);
 
   const app = express();
 
@@ -470,6 +635,28 @@ async function runLocalView(options: LocalViewOptions): Promise<void> {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       res.status(500).json({ error: `Failed to read markdown: ${message}` });
+    }
+  });
+
+  app.get('/api/local-assets/:assetPath(*)', async (req, res) => {
+    const rawAssetPath =
+      typeof req.params['assetPath(*)'] === 'string' ? req.params['assetPath(*)'] : '';
+    const absoluteAssetPath = resolvePathWithinRoot(markdownDir, rawAssetPath);
+    if (!absoluteAssetPath) {
+      res.status(404).type('text/plain; charset=utf-8').send('Asset not found.');
+      return;
+    }
+
+    try {
+      const stats = await fs.stat(absoluteAssetPath);
+      if (!stats.isFile()) {
+        res.status(404).type('text/plain; charset=utf-8').send('Asset not found.');
+        return;
+      }
+
+      res.sendFile(absoluteAssetPath);
+    } catch {
+      res.status(404).type('text/plain; charset=utf-8').send('Asset not found.');
     }
   });
 
@@ -532,6 +719,7 @@ async function runPush(options: PushOptions): Promise<void> {
   const markdownPath = await resolveMarkdownPath(rawPath);
   await validateMarkdownPath(markdownPath);
   const markdownContent = await fs.readFile(markdownPath, 'utf8');
+  const pushAssets = await collectPushAssets(markdownPath, markdownContent);
 
   const serverUrl = await resolveServerUrl(options.server);
   const config = await readConfig();
@@ -548,6 +736,7 @@ async function runPush(options: PushOptions): Promise<void> {
     markdown: string;
     id?: string;
     visibility?: DocumentVisibility;
+    assets?: PushAssetPayload[];
   } = {
     fileName: path.basename(markdownPath),
     markdown: markdownContent
@@ -559,6 +748,10 @@ async function runPush(options: PushOptions): Promise<void> {
 
   if (options.visibility) {
     pushPayload.visibility = options.visibility;
+  }
+
+  if (pushAssets.length > 0) {
+    pushPayload.assets = pushAssets;
   }
 
   const response = await fetch(`${serverUrl}/api/push`, {
@@ -602,6 +795,9 @@ async function runPush(options: PushOptions): Promise<void> {
 
   console.log(`${wasUpdated ? 'Updated' : 'Created'}: ${markdownPath}`);
   console.log(`ID: ${parsed.id}`);
+  if (pushAssets.length > 0) {
+    console.log(`Uploaded assets: ${pushAssets.length}`);
+  }
   if (options.visibility) {
     console.log(`Visibility: ${options.visibility === 'pinned' ? 'public' : 'private'}`);
   }

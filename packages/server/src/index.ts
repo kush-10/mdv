@@ -16,6 +16,9 @@ const DEFAULT_PORT_RANGE = portNumbers(4173, 4300);
 const TOKEN_FILE_NAME = 'server-token';
 const ADMIN_USERNAME_ENV = 'MDV_ADMIN_USERNAME';
 const ADMIN_PASSWORD_ENV = 'MDV_ADMIN_PASSWORD';
+const PUSH_JSON_BODY_LIMIT = '25mb';
+const MAX_PUSH_ASSET_COUNT = 256;
+const MAX_PUSH_ASSET_BYTES = 20 * 1024 * 1024;
 const APP_ICON_16_URL = '/favicon-16.png';
 const APP_ICON_32_URL = '/favicon-32.png';
 const APP_ICON_TOUCH_URL = '/apple-touch-icon.png';
@@ -64,6 +67,17 @@ type PushBody = {
   fileName?: string;
   markdown?: string;
   visibility?: string;
+  assets?: PushAssetBody[];
+};
+
+type PushAssetBody = {
+  path?: unknown;
+  dataBase64?: unknown;
+};
+
+type PushAsset = {
+  path: string;
+  data: Buffer;
 };
 
 type PushResult = {
@@ -431,6 +445,143 @@ function resolveRequestedDocumentId(req: express.Request): string {
   return normalizeDocumentId(fromIdQuery || fromLegacySlugQuery || fromReferer || '');
 }
 
+function decodeUriSafe(value: string): string {
+  try {
+    return decodeURI(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeAssetPath(value: string): string {
+  const decoded = decodeUriSafe(value.trim());
+  if (!decoded) {
+    return '';
+  }
+
+  if (decoded.startsWith('#') || decoded.startsWith('/') || decoded.startsWith('//')) {
+    return '';
+  }
+
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(decoded)) {
+    return '';
+  }
+
+  const separatorIndex = decoded.search(/[?#]/);
+  const withoutSuffix = (separatorIndex === -1 ? decoded : decoded.slice(0, separatorIndex))
+    .replace(/\\/g, '/')
+    .trim();
+  if (!withoutSuffix) {
+    return '';
+  }
+
+  const normalized = path.posix.normalize(withoutSuffix).replace(/^(\.\/)+/, '');
+  if (
+    !normalized ||
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.startsWith('/')
+  ) {
+    return '';
+  }
+
+  return normalized;
+}
+
+function resolvePathWithinRoot(rootDir: string, relativePath: string): string | null {
+  const normalizedRelativePath = normalizeAssetPath(relativePath);
+  if (!normalizedRelativePath) {
+    return null;
+  }
+
+  const absoluteRootDir = path.resolve(rootDir);
+  const candidatePath = path.resolve(absoluteRootDir, normalizedRelativePath);
+  const candidateRelativePath = path.relative(absoluteRootDir, candidatePath);
+  if (!candidateRelativePath || candidateRelativePath.startsWith('..') || path.isAbsolute(candidateRelativePath)) {
+    return null;
+  }
+
+  return candidatePath;
+}
+
+function parsePushAssets(value: PushBody['assets']): { assets: PushAsset[] } | { error: string } {
+  if (value === undefined) {
+    return { assets: [] };
+  }
+
+  if (!Array.isArray(value)) {
+    return { error: 'Body `assets` must be an array when provided.' };
+  }
+
+  if (value.length > MAX_PUSH_ASSET_COUNT) {
+    return { error: `Body \`assets\` exceeds the limit of ${MAX_PUSH_ASSET_COUNT} files.` };
+  }
+
+  const parsedAssets: PushAsset[] = [];
+  let totalBytes = 0;
+
+  for (const [index, rawAsset] of value.entries()) {
+    if (!rawAsset || typeof rawAsset !== 'object' || Array.isArray(rawAsset)) {
+      return { error: `Body \`assets[${index}]\` must be an object.` };
+    }
+
+    const normalizedPath =
+      typeof rawAsset.path === 'string' ? normalizeAssetPath(rawAsset.path) : '';
+    if (!normalizedPath) {
+      return { error: `Body \`assets[${index}].path\` must be a safe relative path.` };
+    }
+
+    if (typeof rawAsset.dataBase64 !== 'string') {
+      return { error: `Body \`assets[${index}].dataBase64\` must be a base64 string.` };
+    }
+
+    let data: Buffer;
+    try {
+      data = Buffer.from(rawAsset.dataBase64, 'base64');
+    } catch {
+      return { error: `Body \`assets[${index}].dataBase64\` must be valid base64.` };
+    }
+
+    totalBytes += data.length;
+    if (totalBytes > MAX_PUSH_ASSET_BYTES) {
+      return { error: `Body \`assets\` exceeds ${Math.round(MAX_PUSH_ASSET_BYTES / (1024 * 1024))} MB.` };
+    }
+
+    parsedAssets.push({
+      path: normalizedPath,
+      data
+    });
+  }
+
+  return { assets: parsedAssets };
+}
+
+function getDocumentAssetDirectory(assetsDir: string, id: string): string {
+  return path.join(assetsDir, id);
+}
+
+async function writeDocumentAssets(assetsDir: string, id: string, assets: PushAsset[]): Promise<void> {
+  const documentAssetDir = getDocumentAssetDirectory(assetsDir, id);
+  await fs.rm(documentAssetDir, { recursive: true, force: true });
+
+  if (assets.length === 0) {
+    return;
+  }
+
+  await Promise.all(
+    assets.map(async (asset) => {
+      const destinationPath = resolvePathWithinRoot(documentAssetDir, asset.path);
+      if (!destinationPath) {
+        throw new Error(`Invalid asset path: ${asset.path}`);
+      }
+
+      await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+      await fs.writeFile(destinationPath, asset.data);
+    })
+  );
+}
+
 function toPdfFileName(fileName: string): string {
   const normalized = normalizeDisplayFileName(fileName);
   const withoutExtension = normalized.replace(/\.[^.]+$/, '').trim();
@@ -641,7 +792,7 @@ async function writePushedDocument(
   };
 }
 
-async function deleteDocument(docsDir: string, id: string): Promise<boolean> {
+async function deleteDocument(docsDir: string, assetsDir: string, id: string): Promise<boolean> {
   const docPath = getDocumentPath(docsDir, id);
   if (!(await fileExists(docPath))) {
     return false;
@@ -649,7 +800,8 @@ async function deleteDocument(docsDir: string, id: string): Promise<boolean> {
 
   await Promise.all([
     fs.rm(docPath),
-    fs.rm(getMetadataPath(docsDir, id), { force: true })
+    fs.rm(getMetadataPath(docsDir, id), { force: true }),
+    fs.rm(getDocumentAssetDirectory(assetsDir, id), { recursive: true, force: true })
   ]);
 
   return true;
@@ -716,12 +868,16 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
   await assertBuildExists();
 
   const docsDir = path.join(config.dataDir, 'docs');
-  await fs.mkdir(docsDir, { recursive: true });
+  const assetsDir = path.join(config.dataDir, 'assets');
+  await Promise.all([
+    fs.mkdir(docsDir, { recursive: true }),
+    fs.mkdir(assetsDir, { recursive: true })
+  ]);
 
   const app = express();
   const requireAdminAuth = createAdminAuthMiddleware(config.admin);
   app.set('trust proxy', true);
-  app.use(express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: PUSH_JSON_BODY_LIMIT }));
   app.use(express.urlencoded({ extended: false }));
 
   app.get('/health', (_req, res) => {
@@ -758,6 +914,12 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       ? normalizeDocumentVisibility(visibilityValue)
       : undefined;
 
+    const parsedAssetsResult = parsePushAssets(body.assets);
+    if ('error' in parsedAssetsResult) {
+      res.status(400).json({ error: parsedAssetsResult.error });
+      return;
+    }
+
     let pushResult: PushResult;
     try {
       pushResult = await writePushedDocument(
@@ -767,8 +929,10 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
         requestedId,
         requestedVisibility
       );
+
+      await writeDocumentAssets(assetsDir, pushResult.id, parsedAssetsResult.assets);
     } catch {
-      res.status(500).json({ error: 'Failed to persist markdown document.' });
+      res.status(500).json({ error: 'Failed to persist markdown document and assets.' });
       return;
     }
 
@@ -807,6 +971,47 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       throw error;
     }
   };
+
+  app.get('/api/assets/:id/:assetPath(*)', async (req, res) => {
+    const id = normalizeDocumentId(req.params.id ?? '');
+    if (!id) {
+      sendNotFoundPageResponse(res);
+      return;
+    }
+
+    const rawAssetPath =
+      typeof req.params['assetPath(*)'] === 'string' ? req.params['assetPath(*)'] : '';
+    const documentAssetDir = getDocumentAssetDirectory(assetsDir, id);
+    const absoluteAssetPath = resolvePathWithinRoot(documentAssetDir, rawAssetPath);
+    if (!absoluteAssetPath) {
+      sendNotFoundPageResponse(res);
+      return;
+    }
+
+    try {
+      const metadata = await ensureDocumentMetadata(docsDir, id);
+      if (!canAccessDocument(req, metadata, config.admin)) {
+        sendNotFoundPageResponse(res);
+        return;
+      }
+
+      const assetStats = await fs.stat(absoluteAssetPath);
+      if (!assetStats.isFile()) {
+        sendNotFoundPageResponse(res);
+        return;
+      }
+
+      res.setHeader('cache-control', 'no-store');
+      res.sendFile(absoluteAssetPath);
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        sendNotFoundPageResponse(res);
+        return;
+      }
+
+      res.status(500).type('text/plain; charset=utf-8').send('Unable to load this asset right now. Please try again.');
+    }
+  });
 
   const sendPdfResponse = async (
     req: express.Request,
@@ -981,7 +1186,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
 
     try {
-      const wasDeleted = await deleteDocument(docsDir, id);
+      const wasDeleted = await deleteDocument(docsDir, assetsDir, id);
       if (!wasDeleted) {
         res.status(404).json({ error: `Document not found: ${id}` });
         return;
@@ -1001,7 +1206,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
 
     try {
-      const wasDeleted = await deleteDocument(docsDir, id);
+      const wasDeleted = await deleteDocument(docsDir, assetsDir, id);
       if (!wasDeleted) {
         res.redirect(303, '/admin?status=not-found');
         return;

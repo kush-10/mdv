@@ -169,6 +169,19 @@ async function getAdminSessionState(): Promise<AdminSessionState> {
 const POLL_INTERVAL_MS = 800;
 const EDIT_AUTOSAVE_DEBOUNCE_MS = 900;
 const GITHUB_REPOSITORY_URL = 'https://github.com/kush-10/mdv';
+const RELATIVE_IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.svg',
+  '.avif',
+  '.bmp',
+  '.ico',
+  '.tif',
+  '.tiff'
+]);
 
 const sanitizeSchema = {
   ...defaultSchema,
@@ -287,6 +300,93 @@ function getRemoteSlugFromLocation(): string {
   } catch {
     return '';
   }
+}
+
+function decodeUriSafe(value: string): string {
+  try {
+    return decodeURI(value);
+  } catch {
+    return value;
+  }
+}
+
+function isExternalOrRootUrl(value: string): boolean {
+  return (
+    value.startsWith('#') ||
+    value.startsWith('/') ||
+    value.startsWith('//') ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)
+  );
+}
+
+function hasImageExtension(relativePath: string): boolean {
+  const lastSegment = relativePath.split('/').filter(Boolean).at(-1) ?? '';
+  const extensionStartIndex = lastSegment.lastIndexOf('.');
+  if (extensionStartIndex <= 0) {
+    return false;
+  }
+
+  return RELATIVE_IMAGE_EXTENSIONS.has(lastSegment.slice(extensionStartIndex).toLowerCase());
+}
+
+function normalizeRelativeUrlPath(value: string): string {
+  const decoded = decodeUriSafe(value.trim()).replace(/\\/g, '/');
+  if (!decoded || isExternalOrRootUrl(decoded)) {
+    return '';
+  }
+
+  const separatorIndex = decoded.search(/[?#]/);
+  const withoutSuffix = separatorIndex === -1 ? decoded : decoded.slice(0, separatorIndex);
+  const segments = withoutSuffix.split('/');
+  const normalizedSegments: string[] = [];
+
+  for (const segment of segments) {
+    if (!segment || segment === '.') {
+      continue;
+    }
+
+    if (segment === '..') {
+      if (normalizedSegments.length === 0) {
+        return '';
+      }
+
+      normalizedSegments.pop();
+      continue;
+    }
+
+    normalizedSegments.push(segment);
+  }
+
+  if (normalizedSegments.length === 0) {
+    return '';
+  }
+
+  return normalizedSegments.join('/');
+}
+
+function getUrlSuffix(value: string): string {
+  const separatorIndex = value.search(/[?#]/);
+  return separatorIndex === -1 ? '' : value.slice(separatorIndex);
+}
+
+function encodePathSegments(value: string): string {
+  return value
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
+
+function resolveMarkdownImageUrl(source: string, remoteSlug: string): string {
+  const normalizedPath = normalizeRelativeUrlPath(source);
+  if (!normalizedPath || !hasImageExtension(normalizedPath)) {
+    return source;
+  }
+
+  const basePath = remoteSlug
+    ? `/api/assets/${encodeURIComponent(remoteSlug)}`
+    : '/api/local-assets';
+  return `${basePath}/${encodePathSegments(normalizedPath)}${getUrlSuffix(source)}`;
 }
 
 function getShareUrlFromLocation(): string {
@@ -432,6 +532,16 @@ export function App(): JSX.Element {
   const pdfDownloadUrl = useMemo(() => getPdfDownloadUrl(remoteSlug), [remoteSlug]);
 
   const renderedMarkdown = isEditMode ? draftMarkdown : markdown;
+
+  const markdownComponents = useMemo(
+    () => ({
+      img: ({ node: _node, src, ...props }: any) => {
+        const resolvedSrc = typeof src === 'string' ? resolveMarkdownImageUrl(src, remoteSlug) : src;
+        return <img {...props} src={resolvedSrc} />;
+      }
+    }),
+    [remoteSlug]
+  );
 
   const editorLineNumbers = useMemo(() => {
     const lineCount = Math.max(1, draftMarkdown.split(/\r\n|\r|\n/).length);
@@ -1222,6 +1332,7 @@ export function App(): JSX.Element {
                     remarkPlugins={remarkPlugins as any}
                     rehypePlugins={rehypePlugins as any}
                     remarkRehypeOptions={remarkRehypeOptions as any}
+                    components={markdownComponents as any}
                   >
                     {renderedMarkdown}
                   </ReactMarkdown>
@@ -1238,6 +1349,7 @@ export function App(): JSX.Element {
                 remarkPlugins={remarkPlugins as any}
                 rehypePlugins={rehypePlugins as any}
                 remarkRehypeOptions={remarkRehypeOptions as any}
+                components={markdownComponents as any}
               >
                 {renderedMarkdown}
               </ReactMarkdown>

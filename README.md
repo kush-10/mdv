@@ -65,6 +65,7 @@ mdv push README.md --public
 
 Pushing the same local file updates the same published page unless that page was deleted.
 Use `--public` to pin on `/`, or `--private` to require admin auth to open `/d/<id>`.
+When using `mdv push`, relative image references such as `./images/example.png` are uploaded automatically and served with the page.
 
 ## Pages in Server Mode
 
