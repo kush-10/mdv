@@ -39,6 +39,8 @@ In the viewer:
 - Theme button toggles light/dark.
 - Bottom GitHub icon links to this repository.
 
+Markdown rendering includes GitHub-flavored Markdown, footnotes, definition lists, emoji shortcodes, highlights, sub/superscript, and LaTeX math via `$...$`, `$$...$$`, and fenced `math` blocks.
+
 ## Share Mode (Optional)
 
 If you want public links (`/d/<id>`), run `mdv-server`.

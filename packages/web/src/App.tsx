@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
+import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import rehypeSlug from 'rehype-slug';
@@ -10,6 +11,7 @@ import { defListHastHandlers, remarkDefinitionList } from 'remark-definition-lis
 import remarkGemoji from 'remark-gemoji';
 import remarkGfm from 'remark-gfm';
 import { remarkMark } from 'remark-mark-highlight';
+import remarkMath from 'remark-math';
 import remarkSupersub from 'remark-supersub';
 import { ThemeAnimationType, useModeAnimation } from 'react-theme-switch-animation';
 
@@ -208,7 +210,7 @@ const sanitizeSchema = {
     ],
     code: [
       ...((defaultSchema.attributes?.code as any[]) ?? []),
-      ['className', /^language-./, /^hljs(?:-|$).*/]
+      ['className', /^language-./, /^hljs(?:-|$).*/, 'math-inline', 'math-display']
     ],
     h1: [...((defaultSchema.attributes?.h1 as any[]) ?? []), 'id'],
     h2: [...((defaultSchema.attributes?.h2 as any[]) ?? []), 'id'],
@@ -236,6 +238,7 @@ const sanitizeSchema = {
 
 const remarkPlugins = [
   [remarkGfm, { singleTilde: false }],
+  remarkMath,
   remarkCustomHeaderId,
   remarkDefinitionList,
   remarkGemoji,
@@ -246,8 +249,9 @@ const remarkPlugins = [
 const rehypePlugins = [
   rehypeRaw,
   rehypeSlug,
-  rehypeHighlight,
-  [rehypeSanitize, sanitizeSchema]
+  [rehypeSanitize, sanitizeSchema],
+  rehypeKatex,
+  rehypeHighlight
 ];
 
 const remarkRehypeOptions = {

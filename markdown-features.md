@@ -142,6 +142,22 @@ Water is H~2~O.
 
 Math example: X^2^ + Y^2^ = Z^2^.
 
+### LaTeX math
+
+Inline math renders with KaTeX: $E = mc^2$ and $\alpha + \beta = \gamma$.
+
+Display math:
+
+$$
+\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
+$$
+
+Fenced math block:
+
+```math
+\nabla \cdot \vec{E} = \frac{\rho}{\varepsilon_0}
+```
+
 ### Automatic URL linking
 
 Bare URL should autolink: https://example.org/docs/markdown
