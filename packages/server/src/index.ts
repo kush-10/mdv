@@ -24,6 +24,7 @@ const APP_ICON_32_URL = '/favicon-32.png';
 const APP_ICON_TOUCH_URL = '/apple-touch-icon.png';
 const REPOSITORY_URL = 'https://github.com/kush-10/mdv';
 const PAGE_NOT_FOUND_MESSAGE = 'Page not found. Check the URL, or sign in via /admin if this is a private page.';
+const UNFILED_FOLDER_LABEL = 'Unfiled';
 
 type AdminCredentials = {
   username: string;
@@ -38,6 +39,7 @@ type DocumentMetadata = {
   createdAt: string;
   updatedAt: string;
   visibility: DocumentVisibility;
+  folder: string;
 };
 
 type DocumentListItem = {
@@ -46,7 +48,18 @@ type DocumentListItem = {
   createdAt: string;
   updatedAt: string;
   visibility: DocumentVisibility;
+  folder: string;
   path: string;
+};
+
+type FolderListItem = {
+  name: string;
+  displayName: string;
+  path: string;
+  total: number;
+  pinnedCount: number;
+  privateCount: number;
+  updatedAt: string;
 };
 
 type StartConfig = {
@@ -91,7 +104,7 @@ type DocumentMetadataRecord = {
   shouldRewrite: boolean;
 };
 
-type UiIconName = 'pin' | 'lock' | 'share' | 'bin' | 'link' | 'download';
+type UiIconName = 'pin' | 'lock' | 'share' | 'bin' | 'link' | 'download' | 'folder' | 'admin';
 
 function printUsage(): void {
   console.error('Usage:');
@@ -258,6 +271,26 @@ function normalizeDisplayFileName(fileName: string | undefined): string {
   return normalized.slice(0, 200);
 }
 
+function normalizeFolderName(folderName: unknown): string {
+  if (typeof folderName !== 'string') {
+    return '';
+  }
+
+  return folderName
+    .replace(/[\u0000-\u001f\u007f/\\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
+
+function getFolderDisplayName(folderName: string): string {
+  return folderName || UNFILED_FOLDER_LABEL;
+}
+
+function getFolderPath(folderName: string): string {
+  return folderName ? `/folders/${encodeURIComponent(folderName)}` : '/folders';
+}
+
 function isDocumentVisibility(value: string): value is DocumentVisibility {
   return value === 'private' || value === 'pinned';
 }
@@ -324,11 +357,18 @@ function escapeHtml(value: string): string {
 }
 
 function renderUiIcon(name: UiIconName): string {
-  if (name === 'bin') {
-    return '<svg viewBox="0 0 20 20" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4.8 5.5h10.4" /><path d="m7.4 5.5.4-1.5h4.4l.4 1.5" /><rect x="6" y="5.5" width="8" height="10.3" rx="1.2" /><path d="M8.8 8.2v5" /><path d="M11.2 8.2v5" /></svg>';
-  }
+  const shapes: Record<UiIconName, string> = {
+    pin: '<path d="M7 3.9h6l-1 4 2.4 2V11H5.6V9.9L8 7.9l-1-4Z" /><path d="M10 11v5.1" />',
+    lock: '<path d="M7.1 9V7a2.9 2.9 0 0 1 5.8 0v2" /><rect x="5.4" y="9" width="9.2" height="7.5" rx="1.4" />',
+    share: '<circle cx="15.2" cy="4.7" r="1.9" /><circle cx="4.8" cy="10" r="1.9" /><circle cx="15.2" cy="15.3" r="1.9" /><path d="m6.5 9.1 6.9-3.4" /><path d="m6.5 10.9 6.9 3.4" />',
+    bin: '<path d="M4.8 5.5h10.4" /><path d="m7.4 5.5.4-1.5h4.4l.4 1.5" /><rect x="6" y="5.5" width="8" height="10.3" rx="1.2" /><path d="M8.8 8.2v5" /><path d="M11.2 8.2v5" />',
+    link: '<path d="m7.5 12.5-1.9 1.9a2.8 2.8 0 1 1-4-4l1.9-1.9a2.8 2.8 0 0 1 4 0" /><path d="m12.5 7.5 1.9-1.9a2.8 2.8 0 0 1 4 4l-1.9 1.9a2.8 2.8 0 0 1-4 0" /><path d="M7.7 12.3 12.3 7.7" />',
+    download: '<path d="M10 3.7v8.1" /><path d="m6.8 8.9 3.2 3.2 3.2-3.2" /><path d="M4.7 15.8h10.6" />',
+    folder: '<path d="M3.6 6.1h5l1.4 1.7h6.4v7.4a1.5 1.5 0 0 1-1.5 1.5H5.1a1.5 1.5 0 0 1-1.5-1.5V6.1Z" /><path d="M3.6 8.1h12.8" />',
+    admin: '<circle cx="10" cy="7" r="3" /><path d="M4.8 16.2a5.3 5.3 0 0 1 10.4 0" />'
+  };
 
-  return `<svg viewBox="0 0 20 20" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><use href="/icons/ui.svg#${name}" /></svg>`;
+  return `<svg viewBox="0 0 20 20" class="ui-icon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${shapes[name]}</svg>`;
 }
 
 function renderGithubIcon(): string {
@@ -633,18 +673,21 @@ async function readDocumentMetadataRecord(
     const createdAt = typeof parsed.createdAt === 'string' && parsed.createdAt ? parsed.createdAt : '';
     const updatedAt = typeof parsed.updatedAt === 'string' && parsed.updatedAt ? parsed.updatedAt : '';
     const visibility = normalizeDocumentVisibility(parsed.visibility);
+    const folder = normalizeFolderName(parsed.folder);
     const metadata: DocumentMetadata = {
       id,
       fileName,
       createdAt: createdAt || new Date().toISOString(),
       updatedAt: updatedAt || createdAt || new Date().toISOString(),
-      visibility
+      visibility,
+      folder
     };
     const shouldRewrite =
       parsed.id !== id ||
       parsed.fileName !== fileName ||
       parsed.createdAt !== metadata.createdAt ||
       parsed.updatedAt !== metadata.updatedAt ||
+      parsed.folder !== folder ||
       !isDocumentVisibility(typeof parsed.visibility === 'string' ? parsed.visibility : '');
 
     return {
@@ -672,7 +715,8 @@ async function ensureDocumentMetadata(docsDir: string, id: string): Promise<Docu
     fileName: existingRecord?.metadata.fileName ?? `${id}.md`,
     createdAt: existingRecord?.metadata.createdAt ?? fallbackCreatedAt,
     updatedAt: existingRecord?.metadata.updatedAt ?? fallbackUpdatedAt,
-    visibility: existingRecord?.metadata.visibility ?? 'private'
+    visibility: existingRecord?.metadata.visibility ?? 'private',
+    folder: existingRecord?.metadata.folder ?? ''
   };
 
   if (!existingRecord || existingRecord.shouldRewrite) {
@@ -697,6 +741,7 @@ async function listDocuments(docsDir: string): Promise<DocumentListItem[]> {
         createdAt: metadata.createdAt,
         updatedAt: metadata.updatedAt,
         visibility: metadata.visibility,
+        folder: metadata.folder,
         path: `/d/${encodeURIComponent(id)}`
       } satisfies DocumentListItem;
     })
@@ -706,9 +751,45 @@ async function listDocuments(docsDir: string): Promise<DocumentListItem[]> {
   return documents;
 }
 
-async function listPinnedDocuments(docsDir: string): Promise<DocumentListItem[]> {
+async function listAccessibleDocuments(
+  docsDir: string,
+  req: express.Request,
+  admin: AdminCredentials
+): Promise<DocumentListItem[]> {
   const documents = await listDocuments(docsDir);
+  if (isAuthorizedAdminRequest(req, admin)) {
+    return documents;
+  }
+
   return documents.filter((document) => document.visibility === 'pinned');
+}
+
+function filterDocumentsByFolder(documents: DocumentListItem[], folderName: string): DocumentListItem[] {
+  return documents.filter((document) => document.folder === folderName);
+}
+
+function summarizeDocumentFolders(documents: DocumentListItem[]): FolderListItem[] {
+  const folders = new Map<string, FolderListItem>();
+
+  for (const document of documents) {
+    const folderName = document.folder;
+    const existing = folders.get(folderName);
+    const nextUpdatedAt = existing && Date.parse(existing.updatedAt) > Date.parse(document.updatedAt)
+      ? existing.updatedAt
+      : document.updatedAt;
+
+    folders.set(folderName, {
+      name: folderName,
+      displayName: getFolderDisplayName(folderName),
+      path: getFolderPath(folderName),
+      total: (existing?.total ?? 0) + 1,
+      pinnedCount: (existing?.pinnedCount ?? 0) + (document.visibility === 'pinned' ? 1 : 0),
+      privateCount: (existing?.privateCount ?? 0) + (document.visibility === 'private' ? 1 : 0),
+      updatedAt: nextUpdatedAt
+    });
+  }
+
+  return [...folders.values()].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
 }
 
 async function readMarkdownWithMetadata(
@@ -729,9 +810,11 @@ async function writePushedDocument(
   markdown: string,
   fileName: string | undefined,
   requestedId: string,
-  visibility?: DocumentVisibility
+  visibility?: DocumentVisibility,
+  folder?: string
 ): Promise<PushResult> {
   const normalizedFileName = normalizeDisplayFileName(fileName);
+  const normalizedFolder = folder === undefined ? undefined : normalizeFolderName(folder);
   const now = new Date().toISOString();
 
   if (requestedId) {
@@ -754,7 +837,8 @@ async function writePushedDocument(
         fileName: normalizedFileName,
         createdAt,
         updatedAt: now,
-        visibility: visibility ?? existingMetadata?.visibility ?? 'private'
+        visibility: visibility ?? existingMetadata?.visibility ?? 'private',
+        folder: normalizedFolder ?? existingMetadata?.folder ?? ''
       };
 
       await Promise.all([
@@ -777,7 +861,8 @@ async function writePushedDocument(
     fileName: normalizedFileName,
     createdAt: now,
     updatedAt: now,
-    visibility: visibility ?? 'private'
+    visibility: visibility ?? 'private',
+    folder: normalizedFolder ?? ''
   };
 
   await Promise.all([
@@ -810,7 +895,7 @@ async function deleteDocument(docsDir: string, assetsDir: string, id: string): P
 async function updateDocumentContent(
   docsDir: string,
   id: string,
-  updates: { markdown?: string; visibility?: DocumentVisibility }
+  updates: { markdown?: string; visibility?: DocumentVisibility; folder?: string }
 ): Promise<DocumentMetadata | null> {
   const docPath = getDocumentPath(docsDir, id);
   if (!(await fileExists(docPath))) {
@@ -820,7 +905,8 @@ async function updateDocumentContent(
   const markdownUpdate = typeof updates.markdown === 'string' ? updates.markdown : null;
   const hasMarkdownUpdate = markdownUpdate !== null;
   const hasVisibilityUpdate = typeof updates.visibility === 'string';
-  if (!hasMarkdownUpdate && !hasVisibilityUpdate) {
+  const hasFolderUpdate = updates.folder !== undefined;
+  if (!hasMarkdownUpdate && !hasVisibilityUpdate && !hasFolderUpdate) {
     return ensureDocumentMetadata(docsDir, id);
   }
 
@@ -829,7 +915,8 @@ async function updateDocumentContent(
   const nextMetadata: DocumentMetadata = {
     ...metadata,
     updatedAt: now,
-    visibility: updates.visibility ?? metadata.visibility
+    visibility: updates.visibility ?? metadata.visibility,
+    folder: hasFolderUpdate ? normalizeFolderName(updates.folder) : metadata.folder
   };
 
   const pendingWrites: Promise<unknown>[] = [writeDocumentMetadata(docsDir, nextMetadata)];
@@ -1076,6 +1163,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
 
       res.setHeader('x-md-path', document.metadata.fileName);
       res.setHeader('x-md-visibility', document.metadata.visibility);
+      res.setHeader('x-md-folder', document.metadata.folder);
       res.type('text/plain; charset=utf-8').send(document.markdown);
     } catch {
       res.status(500).json({ error: 'Unable to load this page right now. Please try again.' });
@@ -1097,6 +1185,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
 
       res.setHeader('x-md-path', document.metadata.fileName);
       res.setHeader('x-md-visibility', document.metadata.visibility);
+      res.setHeader('x-md-folder', document.metadata.folder);
       res.type('text/plain; charset=utf-8').send(document.markdown);
     } catch {
       res.status(500).json({ error: 'Unable to load this page right now. Please try again.' });
@@ -1125,6 +1214,41 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     res.json({ ok: true });
   });
 
+  const sendFolderJsonResponse = async (
+    req: express.Request,
+    res: express.Response,
+    folderName: string
+  ): Promise<void> => {
+    try {
+      const accessibleDocuments = await listAccessibleDocuments(docsDir, req, config.admin);
+      const folderDocuments = filterDocumentsByFolder(accessibleDocuments, folderName);
+
+      res.setHeader('cache-control', 'no-store');
+      res.json({
+        folder: folderName,
+        displayName: getFolderDisplayName(folderName),
+        files: folderDocuments.map((document) => ({
+          id: document.id,
+          fileName: document.fileName,
+          updatedAt: document.updatedAt,
+          visibility: document.visibility,
+          path: document.path
+        }))
+      });
+    } catch {
+      res.status(500).json({ error: 'Failed to load folder.' });
+    }
+  };
+
+  app.get('/api/folders', async (req, res) => {
+    await sendFolderJsonResponse(req, res, '');
+  });
+
+  app.get('/api/folders/:folderName', async (req, res) => {
+    const folderName = normalizeFolderName(typeof req.params.folderName === 'string' ? req.params.folderName : '');
+    await sendFolderJsonResponse(req, res, folderName);
+  });
+
   app.put('/api/admin/files/:id', requireAdminAuth, async (req, res) => {
     const id = normalizeDocumentId(typeof req.params.id === 'string' ? req.params.id : '');
     if (!id) {
@@ -1132,13 +1256,15 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
-    const body = (req.body ?? {}) as { markdown?: unknown; visibility?: unknown };
+    const body = (req.body ?? {}) as { markdown?: unknown; visibility?: unknown; folder?: unknown };
     const nextMarkdown = typeof body.markdown === 'string' ? body.markdown : undefined;
     const visibilityValue = typeof body.visibility === 'string' ? body.visibility : undefined;
     const hasVisibilityField = visibilityValue !== undefined;
     const nextVisibility = hasVisibilityField
       ? normalizeDocumentVisibility(visibilityValue)
       : undefined;
+    const hasFolderField = body.folder !== undefined;
+    const nextFolder = hasFolderField && typeof body.folder === 'string' ? normalizeFolderName(body.folder) : undefined;
 
     if (body.markdown !== undefined && typeof body.markdown !== 'string') {
       res.status(400).json({ error: 'Body `markdown` must be a string.' });
@@ -1150,15 +1276,21 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       return;
     }
 
-    if (nextMarkdown === undefined && !hasVisibilityField) {
-      res.status(400).json({ error: 'Provide at least one update (`markdown` or `visibility`).' });
+    if (hasFolderField && typeof body.folder !== 'string') {
+      res.status(400).json({ error: 'Body `folder` must be a string.' });
+      return;
+    }
+
+    if (nextMarkdown === undefined && !hasVisibilityField && !hasFolderField) {
+      res.status(400).json({ error: 'Provide at least one update (`markdown`, `visibility`, or `folder`).' });
       return;
     }
 
     try {
       const updatedMetadata = await updateDocumentContent(docsDir, id, {
         markdown: nextMarkdown,
-        visibility: nextVisibility
+        visibility: nextVisibility,
+        folder: hasFolderField ? nextFolder : undefined
       });
 
       if (!updatedMetadata) {
@@ -1172,7 +1304,8 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
         id,
         fileName: updatedMetadata.fileName,
         updatedAt: updatedMetadata.updatedAt,
-        visibility: updatedMetadata.visibility
+        visibility: updatedMetadata.visibility,
+        folder: updatedMetadata.folder
       });
     } catch {
       res.status(500).json({ error: 'Failed to update file.' });
@@ -1252,16 +1385,45 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
   });
 
+  app.post('/admin/files/:id/folder', requireAdminAuth, async (req, res) => {
+    const id = normalizeDocumentId(typeof req.params.id === 'string' ? req.params.id : '');
+    const requestedFolder = normalizeFolderName(typeof req.body.folder === 'string' ? req.body.folder : '');
+    if (!id) {
+      res.redirect(303, '/admin?status=invalid-id');
+      return;
+    }
+
+    try {
+      const updatedMetadata = await updateDocumentContent(docsDir, id, {
+        folder: requestedFolder
+      });
+      if (!updatedMetadata) {
+        res.redirect(303, '/admin?status=not-found');
+        return;
+      }
+
+      res.redirect(
+        303,
+        `/admin?status=folder-updated&id=${encodeURIComponent(id)}&folder=${encodeURIComponent(updatedMetadata.folder)}`
+      );
+    } catch {
+      res.redirect(303, '/admin?status=folder-error');
+    }
+  });
+
   app.post('/admin/files/create', requireAdminAuth, async (req, res) => {
     const requestedFileName =
       typeof req.body.fileName === 'string' ? req.body.fileName : undefined;
+    const requestedFolder = normalizeFolderName(typeof req.body.folder === 'string' ? req.body.folder : '');
 
     try {
       const createdDocument = await writePushedDocument(
         docsDir,
         '',
         requestedFileName,
-        ''
+        '',
+        undefined,
+        requestedFolder
       );
 
       res.redirect(303, `/admin?status=created&id=${encodeURIComponent(createdDocument.id)}`);
@@ -1276,6 +1438,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       const statusId = typeof req.query.id === 'string' ? normalizeDocumentId(req.query.id) : '';
       const statusVisibilityRaw = typeof req.query.visibility === 'string' ? req.query.visibility : '';
       const statusVisibility = isDocumentVisibility(statusVisibilityRaw) ? statusVisibilityRaw : '';
+      const statusFolder = normalizeFolderName(typeof req.query.folder === 'string' ? req.query.folder : '');
       const documents = await listDocuments(docsDir);
       const statusToast =
         status === 'created' && statusId
@@ -1323,7 +1486,17 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
                               tone: 'error',
                               body: 'Failed to update document visibility.'
                             }
-                          : null;
+                          : status === 'folder-updated' && statusId
+                            ? {
+                                tone: 'success',
+                                body: `Moved <code>${escapeHtml(statusId)}</code> to <strong>${escapeHtml(getFolderDisplayName(statusFolder))}</strong>.`
+                              }
+                            : status === 'folder-error'
+                              ? {
+                                  tone: 'error',
+                                  body: 'Failed to update document folder.'
+                                }
+                              : null;
       const statusToastMarkup = statusToast
         ? `<div class="toast-shell" aria-live="polite"><div class="toast is-${statusToast.tone}" role="${statusToast.tone === 'error' ? 'alert' : 'status'}"><div class="toast-message">${statusToast.body}</div><button type="button" class="toast-close" aria-label="Dismiss notification">x</button></div></div>`
         : '';
@@ -1335,6 +1508,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
           currentUrl.searchParams.delete('status');
           currentUrl.searchParams.delete('id');
           currentUrl.searchParams.delete('visibility');
+          currentUrl.searchParams.delete('folder');
           const nextSearch = currentUrl.searchParams.toString();
           const nextUrl = currentUrl.pathname + (nextSearch ? ('?' + nextSearch) : '') + currentUrl.hash;
           window.history.replaceState({}, '', nextUrl);
@@ -1373,11 +1547,12 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
         : '';
       const rows =
         documents.length === 0
-          ? '<tr><td colspan="5" class="empty">No files uploaded yet.</td></tr>'
+          ? '<tr><td colspan="6" class="empty">No files uploaded yet.</td></tr>'
           : documents
               .map((document) => {
                 const deletePath = `/admin/files/${encodeURIComponent(document.id)}/delete`;
                 const toggleVisibilityPath = `/admin/files/${encodeURIComponent(document.id)}/state`;
+                const updateFolderPath = `/admin/files/${encodeURIComponent(document.id)}/folder`;
                 const nextVisibility: DocumentVisibility =
                   document.visibility === 'pinned' ? 'private' : 'pinned';
                 const stateIcon =
@@ -1404,6 +1579,12 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
         </form>
       </td>
       <td><a href="${escapeHtml(document.path)}" target="_blank" rel="noopener noreferrer">${escapeHtml(document.fileName)}</a></td>
+      <td class="folder-cell">
+        <form method="post" action="${escapeHtml(updateFolderPath)}" class="folder-form">
+          <input name="folder" type="text" value="${escapeHtml(document.folder)}" placeholder="${escapeHtml(UNFILED_FOLDER_LABEL)}" aria-label="Folder for ${escapeHtml(document.fileName)}" />
+          <button type="submit">Save</button>
+        </form>
+      </td>
       <td><code>${escapeHtml(document.id)}</code></td>
       <td>${escapeHtml(formatUkDateTime(document.createdAt))}</td>
       <td>${escapeHtml(formatUkDateTime(document.updatedAt))}</td>
@@ -1438,6 +1619,12 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       .create-form button { border: 1px solid rgba(127, 127, 127, 0.45); border-radius: 8px; background: transparent; color: inherit; padding: 8px 12px; cursor: pointer; }
       .create-form button:hover { background: rgba(127, 127, 127, 0.12); }
       .create-form input:focus-visible, .create-form button:focus-visible { outline: 2px solid rgba(44, 111, 186, 0.72); outline-offset: 2px; }
+      .folder-cell { min-width: 240px; }
+      .folder-form { margin: 0; display: flex; align-items: center; gap: 8px; }
+      .folder-form input { width: 100%; min-width: 120px; padding: 7px 9px; border: 1px solid rgba(127, 127, 127, 0.45); border-radius: 8px; background: transparent; color: inherit; }
+      .folder-form button { border: 1px solid rgba(127, 127, 127, 0.45); border-radius: 8px; background: transparent; color: inherit; padding: 7px 10px; cursor: pointer; }
+      .folder-form button:hover { background: rgba(127, 127, 127, 0.12); }
+      .folder-form input:focus-visible, .folder-form button:focus-visible { outline: 2px solid rgba(44, 111, 186, 0.72); outline-offset: 2px; }
       table { width: 100%; border-collapse: collapse; }
       td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(127, 127, 127, 0.35); }
       .actions-cell { text-align: center; width: 116px; }
@@ -1485,6 +1672,7 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
         <form method="post" action="/admin/files/create" class="create-form">
           <label for="new-file-name">Add new page</label>
           <input id="new-file-name" name="fileName" type="text" placeholder="new-page.md" />
+          <input name="folder" type="text" placeholder="Folder (${escapeHtml(UNFILED_FOLDER_LABEL)})" aria-label="Folder" />
           <button type="submit">Add</button>
         </form>
       </section>
@@ -1513,22 +1701,35 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     }
   });
 
-  app.get('/', async (_req, res) => {
-    try {
-      const pinnedDocuments = await listPinnedDocuments(docsDir);
-      const pinnedRows =
-        pinnedDocuments.length === 0
-          ? '<li class="empty">No pages here yet.</li>'
-          : pinnedDocuments
-              .map((document) => {
-                return `<li>
-      <a href="${escapeHtml(document.path)}">${escapeHtml(document.fileName)}</a>
-      <span>${escapeHtml(formatUkDateTime(document.updatedAt))}</span>
-    </li>`;
-              })
-              .join('\n');
+  const renderFolderVisibilitySummary = (folder: FolderListItem): string => {
+    const pinned = folder.pinnedCount > 0
+      ? `<span class="visibility-count pinned" title="Pinned pages">${renderUiIcon('pin')}<span>${folder.pinnedCount}</span></span>`
+      : '';
+    const privatePages = folder.privateCount > 0
+      ? `<span class="visibility-count private" title="Private pages">${renderUiIcon('lock')}<span>${folder.privateCount}</span></span>`
+      : '';
 
-      res.type('text/html; charset=utf-8').send(`<!doctype html>
+    return `${pinned}${privatePages}`;
+  };
+
+  const renderDocumentVisibilityIcon = (document: DocumentListItem): string => {
+    const title = document.visibility === 'pinned' ? 'Pinned page' : 'Private page';
+    const icon = document.visibility === 'pinned' ? renderUiIcon('pin') : renderUiIcon('lock');
+    return `<span class="page-visibility ${escapeHtml(document.visibility)}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${icon}</span>`;
+  };
+
+  const renderDirectoryPage = (input: {
+    title: string;
+    heading: string;
+    description: string;
+    body: string;
+    isAdmin: boolean;
+  }): string => {
+    const adminLink = input.isAdmin
+      ? `<a href="/admin" class="admin-link" aria-label="Open admin" title="Admin">${renderUiIcon('admin')}</a>`
+      : '';
+
+    return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -1537,35 +1738,52 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
     <link rel="icon" type="image/png" sizes="32x32" href="${escapeHtml(APP_ICON_32_URL)}" />
     <link rel="shortcut icon" type="image/png" href="${escapeHtml(APP_ICON_32_URL)}" />
     <link rel="apple-touch-icon" href="${escapeHtml(APP_ICON_TOUCH_URL)}" />
-    <title>mdv home</title>
+    <title>${escapeHtml(input.title)}</title>
     <style>
       body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #f7f7f5; color: #161616; }
-      main { width: min(760px, 100%); margin: 0 auto; padding: 10vh 24px 32px; flex: 1; }
+      main { width: min(800px, 100%); margin: 0 auto; padding: 10vh 24px 32px; flex: 1; }
+      .home-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+      .home-heading { min-width: 0; }
+      .admin-link { flex: 0 0 auto; width: 2.4rem; height: 2.4rem; border-radius: 999px; display: inline-grid; place-items: center; color: #343434; text-decoration: none; }
+      .admin-link:hover { background: rgba(127, 127, 127, 0.15); color: #161616; }
       h1 { margin: 0 0 8px; font-size: 2rem; }
       p { margin: 0 0 18px; line-height: 1.65; color: #3f3f3f; }
       ul { list-style: none; margin: 16px 0 0; padding: 0; border: 1px solid #d7d7d2; border-radius: 12px; background: #ffffff; }
-      li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-bottom: 1px solid #e6e6e2; }
+      li { border-bottom: 1px solid #e6e6e2; }
       li:last-child { border-bottom: 0; }
       li a { color: inherit; text-decoration: none; }
-      li a:hover { text-decoration: underline; }
-      li span { color: #5f5f5f; font-size: 0.9rem; white-space: nowrap; }
-      .empty { display: block; color: #5f5f5f; }
+      .folder-link, .page-link { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; }
+      .folder-link:hover, .page-link:hover { background: #f7f7f5; }
+      .folder-title, .page-title { min-width: 0; display: inline-flex; align-items: center; gap: 10px; font-weight: 600; }
+      .folder-title span:last-child, .page-title span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .folder-meta, .page-meta { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 10px; color: #5f5f5f; font-size: 0.9rem; white-space: nowrap; }
+      .visibility-count, .page-visibility { display: inline-flex; align-items: center; gap: 4px; color: #5f5f5f; }
+      .visibility-count.pinned, .page-visibility.pinned { color: #126fad; }
+      .visibility-count.private, .page-visibility.private { color: #5f5f5f; }
+      .ui-icon { width: 1rem; height: 1rem; display: block; }
+      .empty { display: block; padding: 12px 14px; color: #5f5f5f; }
+      .back-link { display: inline-flex; margin-bottom: 14px; color: #3f3f3f; text-decoration: none; }
+      .back-link:hover { text-decoration: underline; }
       .bottom-bar { border-top: 1px solid #d7d7d2; padding: 0.56rem 1rem; display: flex; justify-content: center; background: color-mix(in srgb, #f7f7f5 92%, #ffffff); }
       .repo-link { width: 2.2rem; height: 2.2rem; border-radius: 999px; display: inline-grid; place-items: center; color: #545454; text-decoration: none; }
       .repo-link:hover { background: rgba(127, 127, 127, 0.15); color: #161616; }
       .repo-link .ui-icon { width: 1.12rem; height: 1.12rem; display: block; overflow: visible; }
       @media (max-width: 680px) {
-        li { align-items: flex-start; flex-direction: column; }
+        .folder-link, .page-link { align-items: flex-start; flex-direction: column; }
+        .folder-meta, .page-meta { flex-wrap: wrap; white-space: normal; }
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>mdv</h1>
-      <p>mdv is a clean Markdown app that shows your pinned pages so you can open and read them quickly.</p>
-      <ul>
-        ${pinnedRows}
-      </ul>
+      <header class="home-header">
+        <div class="home-heading">
+          <h1>${escapeHtml(input.heading)}</h1>
+          <p>${escapeHtml(input.description)}</p>
+        </div>
+        ${adminLink}
+      </header>
+      ${input.body}
     </main>
     <footer class="bottom-bar" aria-label="Repository link">
       <a
@@ -1578,10 +1796,83 @@ async function runStart(commandOptions: { port?: number; dataDir: string }): Pro
       >${renderGithubIcon()}</a>
     </footer>
   </body>
-</html>`);
+</html>`;
+  };
+
+  app.get('/', async (req, res) => {
+    try {
+      const isAdmin = isAuthorizedAdminRequest(req, config.admin);
+      const accessibleDocuments = await listAccessibleDocuments(docsDir, req, config.admin);
+      const folders = summarizeDocumentFolders(accessibleDocuments);
+      const folderRows = folders.length === 0
+        ? '<li class="empty">No folders here yet.</li>'
+        : folders
+            .map((folder) => {
+              const pageLabel = folder.total === 1 ? '1 page' : `${folder.total} pages`;
+              return `<li>
+        <a href="${escapeHtml(folder.path)}" class="folder-link">
+          <span class="folder-title">${renderUiIcon('folder')}<span>${escapeHtml(folder.displayName)}</span></span>
+          <span class="folder-meta"><span>${escapeHtml(pageLabel)}</span>${renderFolderVisibilitySummary(folder)}</span>
+        </a>
+      </li>`;
+            })
+            .join('\n');
+      const description = isAdmin
+        ? 'Folders with pinned and private pages you can access.'
+        : 'Folders with pinned pages you can open and read quickly.';
+
+      res.type('text/html; charset=utf-8').send(renderDirectoryPage({
+        title: 'mdv home',
+        heading: 'mdv',
+        description,
+        body: `<ul>${folderRows}</ul>`,
+        isAdmin
+      }));
     } catch {
       res.status(500).type('text/plain; charset=utf-8').send('Failed to render homepage.');
     }
+  });
+
+  const sendFolderPageResponse = async (
+    req: express.Request,
+    res: express.Response,
+    folderName: string
+  ): Promise<void> => {
+    try {
+      const isAdmin = isAuthorizedAdminRequest(req, config.admin);
+      const accessibleDocuments = await listAccessibleDocuments(docsDir, req, config.admin);
+      const folderDocuments = filterDocumentsByFolder(accessibleDocuments, folderName);
+      const pageRows = folderDocuments.length === 0
+        ? '<li class="empty">No pages in this folder yet.</li>'
+        : folderDocuments
+            .map((document) => `<li>
+        <a href="${escapeHtml(document.path)}" class="page-link">
+          <span class="page-title">${renderDocumentVisibilityIcon(document)}<span>${escapeHtml(document.fileName)}</span></span>
+          <span class="page-meta">Updated ${escapeHtml(formatUkDateTime(document.updatedAt))}</span>
+        </a>
+      </li>`)
+            .join('\n');
+      const displayName = getFolderDisplayName(folderName);
+
+      res.type('text/html; charset=utf-8').send(renderDirectoryPage({
+        title: `${displayName} - mdv`,
+        heading: displayName,
+        description: 'Pages in this folder.',
+        body: `<a href="/" class="back-link">Back to folders</a><ul>${pageRows}</ul>`,
+        isAdmin
+      }));
+    } catch {
+      res.status(500).type('text/plain; charset=utf-8').send('Failed to render folder.');
+    }
+  };
+
+  app.get('/folders', (req, res) => {
+    void sendFolderPageResponse(req, res, '');
+  });
+
+  app.get('/folders/:folderName', (req, res) => {
+    const folderName = normalizeFolderName(typeof req.params.folderName === 'string' ? req.params.folderName : '');
+    void sendFolderPageResponse(req, res, folderName);
   });
 
   app.use(express.static(WEB_DIST_PATH, { index: false }));

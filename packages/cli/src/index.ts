@@ -53,6 +53,7 @@ type RemotePairOptions = {
 };
 
 type Command =
+  | { type: 'help' }
   | { type: 'local-view'; options: LocalViewOptions }
   | { type: 'push'; options: PushOptions }
   | { type: 'remote-set'; options: RemoteSetOptions }
@@ -81,14 +82,15 @@ type MdvConfig = {
   pushMap?: PushMap;
 };
 
-function printUsage(): void {
-  console.error('Usage:');
-  console.error('  mdv <path-to-markdown-file> [--port <number>] [--no-open]');
-  console.error('  mdv push <path-to-markdown-file> [--server <url>] [--token <token>] [--private | --public]');
-  console.error('  mdv remote set <server-url>');
-  console.error('  mdv remote pair <server-url> <token>');
-  console.error('  mdv remote clear');
-  console.error('  mdv remote show');
+function printUsage(writeLine: (line: string) => void = console.error): void {
+  writeLine('Usage:');
+  writeLine('  mdv <path-to-markdown-file> [--port <number>] [--no-open]');
+  writeLine('  mdv --help');
+  writeLine('  mdv push <path-to-markdown-file> [--server <url>] [--token <token>] [--private | --public]');
+  writeLine('  mdv remote set <server-url>');
+  writeLine('  mdv remote pair <server-url> <token>');
+  writeLine('  mdv remote clear');
+  writeLine('  mdv remote show');
 }
 
 function getHomeDir(): string {
@@ -412,6 +414,10 @@ function parsePushOptions(argv: string[]): PushOptions {
 
 function parseCommand(argv: string[]): Command {
   const args = argv.filter((arg) => arg !== '--');
+
+  if (args.some((arg) => arg === '--help' || arg === '-h') || args[0] === 'help') {
+    return { type: 'help' };
+  }
 
   if (args[0] === 'push') {
     return {
@@ -869,6 +875,11 @@ async function runRemoteClear(): Promise<void> {
 
 async function main(): Promise<void> {
   const command = parseCommand(process.argv.slice(2));
+
+  if (command.type === 'help') {
+    printUsage(console.log);
+    return;
+  }
 
   if (command.type === 'local-view') {
     await runLocalView(command.options);

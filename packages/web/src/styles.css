@@ -1,5 +1,6 @@
 :root {
   --top-bar-height: 3.95rem;
+  --folder-tabs-height: 3rem;
   --bottom-bar-height: 3.1rem;
   --bg: #f7f7f5;
   --text: #121212;
@@ -203,6 +204,10 @@ body {
   background: var(--code-bg);
 }
 
+.folder-tabs-toggle.is-active {
+  background: var(--code-bg);
+}
+
 .file-path {
   min-width: 0;
   max-width: min(75vw, 980px);
@@ -223,6 +228,100 @@ body {
 .theme-icon .app-icon {
   width: 1rem;
   height: 1rem;
+}
+
+.folder-tab-bar {
+  position: fixed;
+  top: var(--top-bar-height);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  min-height: var(--folder-tabs-height);
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.44rem 1.25rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 96%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.folder-tab-label {
+  flex: 0 0 auto;
+  max-width: min(22vw, 220px);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+  min-width: 0;
+}
+
+.folder-tab-label span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-tabs {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.folder-tab {
+  flex: 0 0 auto;
+  max-width: min(32vw, 260px);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+  padding: 0.28rem 0.58rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.folder-tab:hover {
+  background: var(--code-bg);
+  color: var(--text);
+}
+
+.folder-tab.is-active {
+  border-color: var(--border);
+  background: var(--code-bg);
+  color: var(--text);
+}
+
+.folder-tab-visibility {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.folder-tab-visibility .app-icon {
+  width: 0.86rem;
+  height: 0.86rem;
+}
+
+.folder-tab-visibility.is-pinned {
+  color: var(--text);
+}
+
+.folder-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .share-overlay {
@@ -370,6 +469,11 @@ body {
   overflow-y: auto;
 }
 
+.toc-rail.has-folder-tabs {
+  top: calc(var(--top-bar-height) + var(--folder-tabs-height) - 0.45rem);
+  max-height: calc(100vh - var(--top-bar-height) - var(--folder-tabs-height) - var(--bottom-bar-height) - 0.8rem);
+}
+
 .toc-title {
   margin: 0 0 0.28rem;
   font-size: 0.68rem;
@@ -440,6 +544,10 @@ body {
 .reading-view {
   width: 100%;
   padding: calc(var(--top-bar-height) + 0.55rem) clamp(13rem, 20vw, 16rem) calc(2.5rem + var(--bottom-bar-height)) 2rem;
+}
+
+.reading-view.has-folder-tabs {
+  padding-top: calc(var(--top-bar-height) + var(--folder-tabs-height) + 0.55rem);
 }
 
 .reading-view.is-edit-mode {
@@ -919,8 +1027,25 @@ body {
     height: 2.35rem;
   }
 
+  .folder-tab-bar {
+    padding: 0.42rem 0.9rem;
+    gap: 0.52rem;
+  }
+
+  .folder-tab-label {
+    max-width: 28vw;
+  }
+
+  .folder-tab {
+    max-width: 46vw;
+  }
+
   .reading-view {
     padding: calc(var(--top-bar-height) + 0.3rem) 1rem calc(2rem + var(--bottom-bar-height));
+  }
+
+  .reading-view.has-folder-tabs {
+    padding-top: calc(var(--top-bar-height) + var(--folder-tabs-height) + 0.3rem);
   }
 
   .reading-view.is-edit-mode {

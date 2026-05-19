@@ -34,6 +34,7 @@ In the viewer:
 
 - Top-left `home` icon goes back to the app home page.
 - Pin/lock chip shows whether the page is `pinned` (on home) or `private` (unlisted).
+- Folder icon toggles same-folder page tabs when the current page belongs to a folder.
 - Share button opens QR + copy-link dialog.
 - PDF button downloads a rendered PDF.
 - Theme button toggles light/dark.
@@ -69,13 +70,15 @@ Pushing the same local file updates the same published page unless that page was
 Use `--public` to pin on `/`, or `--private` to require admin auth to open `/d/<id>`.
 When using `mdv push`, relative image references such as `./images/example.png` are uploaded automatically and served with the page.
 
-## Pages in Server Mode
+## Pages and Folders in Server Mode
 
-- `/` Home page: pinned links only.
+- `/` Home page: folders containing pinned pages. If authenticated as admin, private pages are included too.
+- `/folders` Folder page for unfiled pages.
+- `/folders/<folder-name>` Folder page for pages assigned to a folder.
 - `/d/<id>` Markdown reader page.
 - `/admin` Admin page (HTTP Basic Auth required).
 
-Admin lets you create pages, pin/unpin them, and delete permanently.
+Admin lets you create pages, assign folders, pin/unpin them, and delete permanently.
 Private page URLs return a not found error unless you are logged in via `/admin`.
 
 ## Data Location
@@ -116,6 +119,7 @@ mdv-server token rotate
 
 ```bash
 mdv <path-to-markdown-file> [--port <number>] [--no-open]
+mdv --help
 mdv push <path-to-markdown-file> [--server <url>] [--token <token>] [--private | --public]
 mdv remote set <server-url>
 mdv remote pair <server-url> <token>

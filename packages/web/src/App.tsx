@@ -23,6 +23,14 @@ type HeadingItem = {
 
 type DocumentVisibility = 'private' | 'pinned';
 
+type FolderFile = {
+  id: string;
+  fileName: string;
+  updatedAt: string;
+  visibility: DocumentVisibility;
+  path: string;
+};
+
 type EditStatus = 'idle' | 'checking' | 'saving' | 'saved' | 'error' | 'unauthorized';
 
 type AdminSessionState = 'authorized' | 'unauthorized' | 'error';
@@ -39,6 +47,7 @@ type AppIconName =
   | 'loader'
   | 'sun'
   | 'moon'
+  | 'folder'
   | 'github';
 
 type AppIconProps = {
@@ -120,6 +129,13 @@ function getAppIconShape(name: AppIconName): JSX.Element {
       );
     case 'moon':
       return <path d="M13.8 3.8a6.7 6.7 0 1 0 2.4 12.9A7.2 7.2 0 0 1 13.8 3.8Z" />;
+    case 'folder':
+      return (
+        <>
+          <path d="M3.6 6.1h5l1.4 1.7h6.4v7.4a1.5 1.5 0 0 1-1.5 1.5H5.1a1.5 1.5 0 0 1-1.5-1.5V6.1Z" />
+          <path d="M3.6 8.1h12.8" />
+        </>
+      );
     case 'github':
       return (
         <path
@@ -170,6 +186,7 @@ async function getAdminSessionState(): Promise<AdminSessionState> {
 
 const POLL_INTERVAL_MS = 800;
 const EDIT_AUTOSAVE_DEBOUNCE_MS = 900;
+const FOLDER_TABS_STORAGE_KEY = 'mdv-folder-tabs-visible';
 const GITHUB_REPOSITORY_URL = 'https://github.com/kush-10/mdv';
 const RELATIVE_IMAGE_EXTENSIONS = new Set([
   '.png',
@@ -439,6 +456,49 @@ function normalizeDocumentVisibility(value: string | null | undefined): Document
   return value === 'pinned' ? 'pinned' : 'private';
 }
 
+function getStoredFolderTabsVisibility(): boolean {
+  try {
+    return window.localStorage.getItem(FOLDER_TABS_STORAGE_KEY) !== 'hidden';
+  } catch {
+    return true;
+  }
+}
+
+function storeFolderTabsVisibility(isVisible: boolean): void {
+  try {
+    window.localStorage.setItem(FOLDER_TABS_STORAGE_KEY, isVisible ? 'visible' : 'hidden');
+  } catch {
+    return;
+  }
+}
+
+function parseFolderFiles(value: unknown): FolderFile[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        return null;
+      }
+
+      const raw = item as Record<string, unknown>;
+      if (typeof raw.id !== 'string' || typeof raw.fileName !== 'string' || typeof raw.path !== 'string') {
+        return null;
+      }
+
+      return {
+        id: raw.id,
+        fileName: raw.fileName,
+        updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
+        visibility: normalizeDocumentVisibility(typeof raw.visibility === 'string' ? raw.visibility : undefined),
+        path: raw.path
+      } satisfies FolderFile;
+    })
+    .filter((item): item is FolderFile => item !== null);
+}
+
 function isEditableElement(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -503,6 +563,9 @@ export function App(): JSX.Element {
   const [error, setError] = useState('');
   const [filePath, setFilePath] = useState('');
   const [documentVisibility, setDocumentVisibility] = useState<DocumentVisibility>('private');
+  const [folderName, setFolderName] = useState('');
+  const [folderFiles, setFolderFiles] = useState<FolderFile[]>([]);
+  const [isFolderTabsVisible, setIsFolderTabsVisible] = useState(() => getStoredFolderTabsVisibility());
   const [headings, setHeadings] = useState<HeadingItem[]>([]);
   const [activeHeadingId, setActiveHeadingId] = useState('');
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
@@ -697,6 +760,7 @@ export function App(): JSX.Element {
 
         setFilePath(response.headers.get('x-md-path') ?? '');
         setDocumentVisibility(normalizeDocumentVisibility(response.headers.get('x-md-visibility')));
+        setFolderName((response.headers.get('x-md-folder') ?? '').trim());
         const text = await response.text();
 
         if (isDisposed) {
@@ -730,6 +794,54 @@ export function App(): JSX.Element {
       window.clearInterval(refreshTimer);
     };
   }, [isEditMode, remoteSlug]);
+
+  useEffect(() => {
+    if (!remoteSlug || !folderName) {
+      setFolderFiles([]);
+      return;
+    }
+
+    let isDisposed = false;
+    let isLoading = false;
+    const folderUrl = `/api/folders/${encodeURIComponent(folderName)}`;
+
+    const loadFolder = async () => {
+      if (isLoading || isDisposed) {
+        return;
+      }
+
+      isLoading = true;
+
+      try {
+        const response = await fetch(folderUrl, {
+          cache: 'no-store'
+        });
+
+        if (!response.ok) {
+          throw new Error(`Folder request failed with status ${response.status}`);
+        }
+
+        const payload = (await response.json()) as { files?: unknown };
+        if (!isDisposed) {
+          setFolderFiles(parseFolderFiles(payload.files));
+        }
+      } catch {
+        if (!isDisposed) {
+          setFolderFiles([]);
+        }
+      } finally {
+        isLoading = false;
+      }
+    };
+
+    void loadFolder();
+    const refreshTimer = window.setInterval(loadFolder, POLL_INTERVAL_MS * 4);
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(refreshTimer);
+    };
+  }, [folderName, hasAdminSession, remoteSlug]);
 
   useEffect(() => {
     const fileName = getFileNameFromPath(filePath);
@@ -1092,6 +1204,18 @@ export function App(): JSX.Element {
     setEditStatus('idle');
   };
 
+  const handleFolderTabsToggle = () => {
+    setIsFolderTabsVisible((value) => {
+      const nextValue = !value;
+      storeFolderTabsVisibility(nextValue);
+      return nextValue;
+    });
+  };
+
+  const shouldShowFolderTabs = Boolean(
+    remoteSlug && folderName && folderFiles.length > 0 && isFolderTabsVisible && !isEditMode
+  );
+
   return (
     <>
       <header className="top-bar">
@@ -1118,6 +1242,17 @@ export function App(): JSX.Element {
           </div>
         </div>
         <div className="top-bar-actions">
+          {remoteSlug && folderName ? (
+            <button
+              type="button"
+              className={`top-action-button folder-tabs-toggle${isFolderTabsVisible ? ' is-active' : ''}`}
+              aria-label={isFolderTabsVisible ? 'Hide folder tabs' : 'Show folder tabs'}
+              title={isFolderTabsVisible ? 'Hide folder tabs' : 'Show folder tabs'}
+              onClick={handleFolderTabsToggle}
+            >
+              <AppIcon name="folder" />
+            </button>
+          ) : null}
           {remoteSlug && hasAdminSession ? (
             <button
               type="button"
@@ -1172,8 +1307,32 @@ export function App(): JSX.Element {
         </div>
       </header>
 
+      {shouldShowFolderTabs ? (
+        <nav className="folder-tab-bar" aria-label={`Pages in ${folderName}`}>
+          <div className="folder-tab-label" title={folderName}>
+            <AppIcon name="folder" />
+            <span>{folderName}</span>
+          </div>
+          <div className="folder-tabs">
+            {folderFiles.map((file) => (
+              <a
+                key={file.id}
+                href={file.path}
+                className={`folder-tab${file.id === remoteSlug ? ' is-active' : ''}`}
+                aria-current={file.id === remoteSlug ? 'page' : undefined}
+              >
+                <span className={`folder-tab-visibility is-${file.visibility}`} aria-hidden="true">
+                  <AppIcon name={file.visibility === 'pinned' ? 'pin' : 'lock'} />
+                </span>
+                <span className="folder-tab-title">{file.fileName}</span>
+              </a>
+            ))}
+          </div>
+        </nav>
+      ) : null}
+
       {headings.length > 0 && !isEditMode ? (
-        <aside className="toc-rail" aria-label="Table of contents">
+        <aside className={`toc-rail${shouldShowFolderTabs ? ' has-folder-tabs' : ''}`} aria-label="Table of contents">
           <p className="toc-title">On this page</p>
           <ul className="toc-list">
             {headings.map((heading) => (
@@ -1245,7 +1404,10 @@ export function App(): JSX.Element {
         </div>
       ) : null}
 
-      <main className={`reading-view${isEditMode ? ' is-edit-mode' : ''}`} aria-live="polite">
+      <main
+        className={`reading-view${isEditMode ? ' is-edit-mode' : ''}${shouldShowFolderTabs ? ' has-folder-tabs' : ''}`}
+        aria-live="polite"
+      >
         {isEditMode ? (
           <section className="editor-split">
             <section className="raw-editor-panel" aria-label="Raw markdown editor">
